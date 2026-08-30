@@ -1,0 +1,11 @@
+# Requirements for Azaran Teb Clinic Accounting
+# Python 3.8 + Qt5 on Windows 7 SP1
+# Use PySide2 5.15.x (preferred). If PySide2 is unavailable, install PyQt5 5.15.x instead.
+PySide2==5.15.2.1
+jdatetime==3.6.0
+
+# Web app (FastAPI) — optional, only needed to run the browser UI
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart

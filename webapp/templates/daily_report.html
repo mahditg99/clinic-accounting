@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}گزارش روزانه — {{ app_title }}{% endblock %}
+{% block page_title %}گزارش روزانه{% endblock %}
+{% block content %}
+<form class="card" method="get" action="/reports/daily">
+  <div class="filter-box">
+    <div style="flex:1;min-width:160px;">
+      <label class="flabel">تاریخ (شمسی)</label>
+      <input type="text" name="date" data-jdate value="{{ jdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn primary" type="submit">نمایش</button>
+    </div>
+  </div>
+</form>
+{% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+
+{% if report %}
+<div class="card-grid grid-4">
+  <div class="sum-card info"><span class="lbl">فروش امروز</span><span class="val">{{ sales_f }}</span></div>
+  <div class="sum-card success"><span class="lbl">دریافتی امروز</span><span class="val">{{ total_f }}</span></div>
+  <div class="sum-card warning"><span class="lbl">باقی مانده</span><span class="val">{{ remaining_f }}</span></div>
+  <div class="sum-card"><span class="lbl">تعداد پرداخت</span><span class="val">{{ report.payments|length | fa }}</span></div>
+</div>
+
+<div class="card">
+  <h3 class="card-title">دریافت‌ها به تفکیک روش پرداخت</h3>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>روش پرداخت</th><th class="num">تعداد</th><th class="num">جمع مبلغ</th></tr></thead>
+      <tbody>
+      {% for m in report.by_method %}
+        <tr><td>{{ m.method }}</td><td class="num">{{ m.count | fa }}</td><td class="num">{{ m.total_f }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">دریافتی ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h3 class="card-title">جزئیات پرداخت‌ها</h3>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>تاریخ</th><th>زمان</th><th>پرداخت‌کننده</th><th class="num">مبلغ</th><th>روش</th><th>شماره فاکتور</th></tr></thead>
+      <tbody>
+      {% for p in report.payments %}
+        <tr><td>{{ p.paid_at_j }}</td><td>{{ p.time_hm }}</td><td>{{ p.patient_name or '—' }}</td><td class="num">{{ p.amount_f }}</td><td>{{ p.method }}</td><td>{{ p.invoice_no | fa if p.invoice_no else '—' }}</td></tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">—</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

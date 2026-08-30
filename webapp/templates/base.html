@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ app_title }}{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css?v=15">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-titles">
+        <div class="title">{{ app_title }}</div>
+        <div class="sub">سیستم حسابداری کلینیک</div>
+      </div>
+    </div>
+    <nav>
+      <a href="/" class="{{ 'active' if nav == 'dashboard' }}" style="font-weight:700;"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>داشبورد</a>
+      <div class="nav-caption">عملیات روزانه</div>
+      <a href="/invoice/new" class="{{ 'active' if nav == 'invoice' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span>فاکتور جدید</a>
+      <a href="/invoices" class="{{ 'active' if nav == 'archive' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1.5"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></svg></span>آرشیو فاکتورها</a>
+      <a href="/patients" class="{{ 'active' if nav == 'patients' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c.6-3.4 3-5 6-5s5.4 1.6 6 5"/><path d="M16 3.5a3.2 3.2 0 0 1 1 6.2M17.5 15.1c2 .5 3.2 1.9 3.5 4.4"/></svg></span>پرونده‌ها</a>
+      <a href="/products" class="{{ 'active' if nav == 'products' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8.2 12 3 3 8.2v7.6L12 21l9-5.2V8.2Z"/><path d="M3.3 8.3 12 13.5l8.7-5.2M12 21v-7.5"/></svg></span>فهرست محصولات</a>
+      <div class="nav-caption">گزارش‌ها</div>
+      <a href="/reports/daily" class="{{ 'active' if nav == 'daily' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span>گزارش روزانه</a>
+      <a href="/reports/income-expense" class="{{ 'active' if nav == 'income_expense' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="20" x2="3" y2="15"/><line x1="9" y1="20" x2="9" y2="9"/><line x1="15" y1="20" x2="15" y2="12"/><line x1="21" y1="20" x2="21" y2="4"/></svg></span>درآمد / هزینه</a>
+      <a href="/expenses" class="{{ 'active' if nav == 'expenses' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h2"/><circle cx="16" cy="12" r="2"/><path d="M10 6 7.5 18M14 6l2.5 12"/></svg></span>هزینه‌ها</a>
+      <a href="/reports/financial" class="{{ 'active' if nav == 'financial' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 9 11 13 14 20 6"/><polyline points="15 6 20 6 20 11"/></svg></span>گزارش‌های مالی</a>
+      <a href="/reports/doctor" class="{{ 'active' if nav == 'doctor_report' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 0-3 3v2H7a2 2 0 0 0-2 2h2a2 2 0 0 0 2 2h1m6-6h2a2 2 0 0 0 0 4h-2v2a3 3 0 0 0-3 3"/><path d="M20 21H4"/><path d="M9 13a4 4 0 0 0 6 0"/></svg></span>گزارش پزشکان</a>
+      <a href="/reports/products" class="{{ 'active' if nav == 'product_sales' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8.2 12 3 3 8.2v7.6L12 21l9-5.2V8.2Z"/><path d="M3.3 8.3 12 13.5l8.7-5.2M12 21v-7.5"/></svg></span>فروش محصولات</a>
+      <div class="nav-caption">مدیریت</div>
+      <a href="/doctors" class="{{ 'active' if nav == 'doctors' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M12 21V11M8 13H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1"/><path d="M16 13h2a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-1M12 14v7"/></svg></span>فهرست پزشکان</a>
+      <a href="/settings" class="{{ 'active' if nav == 'settings' }}"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></span>تنظیمات</a>
+    </nav>
+    <div class="sidebar-foot">نسخه ۲.۰</div>
+  </aside>
+
+  <div class="main">
+    <div class="register-ribbon no-print" aria-hidden="true"></div>
+    <header class="topbar no-print">
+      <div>
+        <button id="menuToggle" class="btn ghost sm menu-toggle" type="button" aria-label="منو"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
+        <span class="page-title">{% block page_title %}{% endblock %}</span>
+        {% block page_sub %}{% endblock %}
+      </div>
+      <div class="right-side">
+        <span class="date-chip">{{ today_jalali() }}</span>
+        <div class="user-box">
+          <span class="uname">{{ user }}</span>
+          <a class="btn ghost sm" href="/change-password">تغییر رمز</a>
+          <a class="btn ghost sm" href="/logout">خروج</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="content">
+      {% if flash %}<div class="{{ flash_type }}">{{ flash }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<div id="toasts"></div>
+<script>window.AZARAN_TODAY_JALALI = "{{ today_jalali() }}";</script>
+<script src="/static/app.js?v=9"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

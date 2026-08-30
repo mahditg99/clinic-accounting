@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}آرشیو فاکتورها — {{ app_title }}{% endblock %}
+{% block page_title %}آرشیو فاکتورها{% endblock %}
+{% block page_sub %}<div class="page-sub">جستجو و مدیریت فاکتورهای ثبت‌شده</div>{% endblock %}
+{% block content %}
+{% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+<form class="card" method="get" action="/invoices">
+  <div class="filter-box">
+    <div style="flex:1;min-width:120px;">
+      <label class="flabel">پزشک</label>
+      <select name="doctor">
+        <option value="all" {{ 'selected' if doctor == 'all' }}>همه پزشکان</option>
+        <option value="none" {{ 'selected' if doctor == 'none' }}>بدون معرف</option>
+        {% for d in doctors if d.name != 'بدون معرف' %}
+        <option value="{{ d.id }}" {{ 'selected' if doctor == d.id|string }}>{{ d.name | fa }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:120px;">
+      <label class="flabel">از تاریخ</label>
+      <input type="text" name="fdate" data-jdate value="{{ fdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="flex:1;min-width:120px;">
+      <label class="flabel">تا تاریخ</label>
+      <input type="text" name="tdate" data-jdate value="{{ tdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="flex:2;min-width:160px;">
+      <label class="flabel">جستجو (نام، شماره پرونده، شماره فاکتور)</label>
+      <input type="text" name="q" data-fadigits value="{{ q | fa }}">
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn primary" type="submit">اعمال فیلتر</button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="card-title">
+    <span>فاکتورها <span class="muted">({{ rows|length | fa }} مورد)</span></span>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th class="num">شماره</th><th>شماره پرونده</th><th>بیمار</th><th>تاریخ صدور</th><th class="num">جمع کل</th><th class="num">پرداخت‌شده</th><th class="num">باقی مانده</th><th>پزشک</th><th>عملیات</th></tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td class="num">{{ r.invoice_no | fa }}</td>
+          <td>{{ r.file_no | fa }}</td>
+          <td>{{ r.patient_name }}</td>
+          <td>{{ r.issued_at_j }}</td>
+          <td class="num">{{ r.total_amount }}</td>
+          <td class="num">{{ r.paid_sum }}</td>
+          <td class="num">{{ r.remaining }}</td>
+          <td>{{ (r.doctor_name or 'بدون معرف') | fa }}</td>
+          <td style="white-space:nowrap;">
+            <a class="btn sm outline" href="/invoice/{{ r.id }}">مشاهده / چاپ</a>
+            <a class="btn sm primary" href="/invoice/{{ r.id }}/edit">ویرایش</a>
+            <button class="btn sm danger" onclick="voidInvoice(this, {{ r.id }})">ابطال</button>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="empty">هیچ فاکتوری یافت نشد.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const A = window.azaran40;
+/* Convert Persian digits in the search box to English before submit so
+   file_no / invoice_no searches typed in Persian work (item 6). */
+document.querySelector('form[action="/invoices"]').addEventListener("submit", (e) => {
+  const q = e.target.querySelector("[name=q]");
+  if (q && q.value) q.value = A.enDigits(q.value);
+});
+async function voidInvoice(btn, id) {
+  if (!A.confirmAsk("ابطال فاکتور، موجودی کالاها را برمی‌گرداند. ادامه می‌دهید؟")) return;
+  try {
+    await A.postJSON("/api/invoices/" + id + "/void", {});
+    A.toast("فاکتور ابطال شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}گزارش درآمد/هزینه — {{ app_title }}{% endblock %}
+{% block page_title %}گزارش درآمد / هزینه{% endblock %}
+{% block content %}
+<form class="card" method="get" action="/reports/income-expense">
+  <div class="filter-box">
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">از تاریخ</label>
+      <input type="text" name="fdate" data-jdate value="{{ fdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">تا تاریخ</label>
+      <input type="text" name="tdate" data-jdate value="{{ tdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn primary" type="submit">نمایش</button>
+    </div>
+  </div>
+</form>
+{% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+
+{% if report %}
+<div class="card-grid grid-5">
+  <div class="sum-card info"><span class="lbl">فروش (فاکتورها)</span><span class="val">{{ sales_f }}</span></div>
+  <div class="sum-card success"><span class="lbl">دریافتی</span><span class="val">{{ income_f }}</span></div>
+  <div class="sum-card danger"><span class="lbl">هزینه</span><span class="val">{{ expense_f }}</span></div>
+  <div class="sum-card success"><span class="lbl">سود (دریافتی − هزینه)</span><span class="val">{{ profit_f }}</span></div>
+  <div class="sum-card warning"><span class="lbl">بستانکار (قابل دریافت)</span><span class="val">{{ receivable_f }}</span></div>
+</div>
+<p class="muted" style="font-size:12px;">سود دوره = مجموع دریافتیها منهای مجموع هزینهها. مبلغ «بستانکار» پولی است که هنوز از بیماران دریافت نشده (دارایی کلینیک) و از سود کم نمیشود.</p>
+
+<div class="card-grid grid-2">
+  <div class="card">
+    <h3 class="card-title">خلاصه پزشکان</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>پزشک</th><th class="num">جمع</th></tr></thead>
+        <tbody>
+        {% for d in report.doctor_summary %}
+          <tr><td>{{ d.doctor | fa }}</td><td class="num">{{ d.total_f }}</td></tr>
+        {% else %}
+          <tr><td colspan="2" class="empty">—</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3 class="card-title">هزینه‌ها</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>تاریخ</th><th>دسته</th><th class="num">مبلغ</th><th>توضیحات</th></tr></thead>
+        <tbody>
+        {% for r in report.expenses %}
+          <tr><td>{{ r.expense_date_j }}</td><td>{{ r.category }}</td><td class="num">{{ r.amount_f }}</td><td>{{ r.description or '' }}</td></tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">—</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

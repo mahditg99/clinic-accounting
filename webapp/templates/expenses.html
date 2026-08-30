@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}مدیریت هزینه‌ها — {{ app_title }}{% endblock %}
+{% block page_title %}مدیریت هزینه‌ها{% endblock %}
+{% block content %}
+<div class="card add-card" id="expForm">
+  <h3 class="card-title">ثبت هزینه جدید</h3>
+  <form class="filter-box" id="expenseForm">
+    <div style="flex:1;min-width:130px;">
+      <label class="flabel">تاریخ (شمسی)</label>
+      <input type="text" name="expense_date" data-jdate value="{{ today_jalali() }}" placeholder="YYYY/MM/DD" required>
+    </div>
+    <div style="flex:1;min-width:130px;">
+      <label class="flabel">دسته</label>
+      <select name="category" required>
+        {% for c in categories %}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">مبلغ (تومان)</label>
+      <input type="text" name="amount" data-money required>
+    </div>
+    <div style="flex:2;min-width:160px;">
+      <label class="flabel">توضیحات</label>
+      <input type="text" name="description">
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn success" type="submit">ثبت هزینه</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3 class="card-title">جستجو و فیلتر</h3>
+  <form method="get" action="/expenses">
+    <div class="filter-box">
+      <div style="flex:1;min-width:140px;">
+        <label class="flabel">از تاریخ</label>
+        <input type="text" name="fdate" data-jdate value="{{ fdate }}" placeholder="YYYY/MM/DD">
+      </div>
+      <div style="flex:1;min-width:140px;">
+        <label class="flabel">تا تاریخ</label>
+        <input type="text" name="tdate" data-jdate value="{{ tdate }}" placeholder="YYYY/MM/DD">
+      </div>
+      <div style="flex:1;min-width:140px;">
+        <label class="flabel">دسته</label>
+        <select name="category">
+          <option value="all">همه</option>
+          {% for c in categories %}
+          <option value="{{ c }}" {{ 'selected' if category == c }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="align-self:flex-end;display:flex;gap:8px;">
+        <button class="btn primary" type="submit">فیلتر</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title"><span>فهرست هزینه‌ها <span class="muted">({{ rows|length | fa }} مورد)</span></span></div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>تاریخ</th><th>دسته</th><th class="num">مبلغ</th><th>توضیحات</th><th>عملیات</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.expense_date_j }}</td>
+          <td>{{ r.category }}</td>
+          <td class="num">{{ r.amount_f }}</td>
+          <td>{{ r.description or '' }}</td>
+          <td><button class="btn sm danger" onclick="delExpense(this, {{ r.id }})">حذف</button></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">هزینه‌ای ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const A = window.azaran40;
+const expForm = document.getElementById("expenseForm");
+expForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await A.postForm("/api/expenses", expForm);
+    A.toast("هزینه ثبت شد.", "success");
+    setTimeout(() => location.reload(), 400);
+  } catch (err) { A.toast(err.message, "error"); }
+});
+async function delExpense(btn, id) {
+  if (!A.confirmAsk("این هزینه حذف شود؟")) return;
+  try {
+    const r = await fetch("/api/expenses/" + id, { method: "DELETE", credentials: "same-origin" });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.detail || "خطا"); }
+    A.toast("حذف شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+</script>
+{% endblock %}

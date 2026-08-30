@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}گزارش پزشکان — {{ app_title }}{% endblock %}
+{% block page_title %}گزارش پزشکان{% endblock %}
+{% block content %}
+<form class="card" method="get" action="/reports/doctor">
+  <div class="filter-box">
+    <div style="flex:1;min-width:160px;">
+      <label class="flabel">پزشک</label>
+      <select name="doctor">
+        <option value="all" {{ 'selected' if doctor == 'all' }}>همه پزشکان</option>
+        <option value="none" {{ 'selected' if doctor == 'none' }}>بدون معرف</option>
+        {% for d in doctors if d.name != 'بدون معرف' %}
+        <option value="{{ d.id }}" {{ 'selected' if doctor == d.id|string }}>{{ d.name | fa }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">از تاریخ</label>
+      <input type="text" name="fdate" data-jdate value="{{ fdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">تا تاریخ</label>
+      <input type="text" name="tdate" data-jdate value="{{ tdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn primary" type="submit">نمایش</button>
+    </div>
+  </div>
+</form>
+{% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+
+{% if referral %}
+  <div class="card">
+    <h3 class="card-title">خلاصه معرفی پزشکان</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>پزشک</th><th>آخرین فاکتور</th><th class="num">جمع فروش</th><th class="num">دریافتی</th><th class="num">باقی مانده</th></tr></thead>
+        <tbody>
+        {% for r in referral.rows %}
+          <tr><td>{{ r.doctor_name | fa }}</td><td>{{ r.last_j }}</td><td class="num">{{ r.total_sum_f }}</td><td class="num">{{ r.paid_sum_f }}</td><td class="num">{{ r.remaining_f }}</td></tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">فاکتوری در این بازه ثبت نشده است.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% elif result %}
+  <div class="card-grid grid-5">
+    <div class="sum-card info"><span class="lbl">جمع فروش</span><span class="val">{{ result.total_sales_f }}</span></div>
+    <div class="sum-card success"><span class="lbl">دریافتی</span><span class="val">{{ result.total_received_f }}</span></div>
+    <div class="sum-card warning"><span class="lbl">باقی مانده</span><span class="val">{{ result.total_remaining_f }}</span></div>
+    <div class="sum-card danger"><span class="lbl">جمع هزینه</span><span class="val">{{ result.total_cost_f }}</span></div>
+    <div class="sum-card success"><span class="lbl">سود</span><span class="val">{{ result.total_profit_f }}</span></div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title">فاکتورهای پزشک</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>شماره</th><th>بیمار</th><th>تاریخ</th><th class="num">جمع</th><th class="num">دریافتی</th><th class="num">باقی مانده</th></tr></thead>
+        <tbody>
+        {% for r in result.invoices_summary %}
+          <tr><td>{{ (r.invoice_no or '—') | fa }}</td><td>{{ r.patient_name or '' }}</td><td>{{ r.issued_j }}</td><td class="num">{{ r.total_amount_f }}</td><td class="num">{{ r.total_received_f }}</td><td class="num">{{ r.remaining_f }}</td></tr>
+        {% else %}
+          <tr><td colspan="6" class="empty">فاکتوری ثبت نشده است.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% else %}
+  <div class="card"><div class="empty">گزارشی برای نمایش وجود ندارد.</div></div>
+{% endif %}
+{% endblock %}

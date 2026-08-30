@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ورود — {{ app_title }}</title>
+<link rel="stylesheet" href="/static/style.css?v=15">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-masthead">
+    <div class="lm-seal" aria-hidden="true"></div>
+    <div class="lm-inner">
+      <div class="lm-eyebrow">دفتر کلینیک · سیستم حسابداری</div>
+      <h1 class="lm-title">{{ app_title }}</h1>
+      <div class="lm-rule"></div>
+      <div class="lm-stamp">
+        <span class="lm-stamp-lbl">تاریخ امروز</span>
+        <span class="lm-stamp-date">{{ today_jalali() }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="login-card">
+    <h1>{{ app_title }}</h1>
+    <div class="login-sub">برای ورود، نام کاربری و رمز عبور خود را وارد کنید</div>
+    {% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <div class="form-row">
+        <label class="flabel" for="username">نام کاربری</label>
+        <input type="text" id="username" name="username" required autofocus autocomplete="username">
+      </div>
+      <div class="form-row">
+        <label class="flabel" for="password">رمز عبور</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password">
+      </div>
+      <button class="btn primary block" type="submit">ورود به دفتر</button>
+    </form>
+    <div class="login-foot">سیستم حسابداری کلینیک</div>
+  </div>
+</div>
+</body>
+</html>

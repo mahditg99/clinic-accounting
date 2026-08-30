@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}پرونده‌ها — {{ app_title }}{% endblock %}
+{% block page_title %}پرونده‌های بیماران{% endblock %}
+{% block page_sub %}<div class="page-sub">مدیریت پرونده‌های بیماران</div>{% endblock %}
+{% block content %}
+<div class="card-grid grid-2">
+  <div class="card add-card" style="grid-column:1/-1;margin:0 auto;width:100%;">
+    <h3 class="card-title" id="formTitle">ثبت پرونده جدید</h3>
+    <form id="patientForm">
+      <input type="hidden" name="patient_id" id="patient_id">
+      <div class="filter-box">
+        <div style="flex:1;min-width:120px;">
+          <label class="flabel">شماره پرونده</label>
+          <input type="text" name="file_no" id="file_no" data-fanum inputmode="numeric">
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label class="flabel">نام</label>
+          <input type="text" name="first_name" id="first_name" required>
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label class="flabel">نام خانوادگی</label>
+          <input type="text" name="last_name" id="last_name" required>
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label class="flabel">جنسیت</label>
+          <select name="gender" id="gender">
+            <option value="">—</option>
+            <option value="male">آقا</option>
+            <option value="female">خانم</option>
+          </select>
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label class="flabel">تلفن</label>
+          <input type="text" name="phone" id="phone" data-fanum inputmode="numeric">
+        </div>
+        <div style="flex:1;min-width:120px;">
+          <label class="flabel">آدرس</label>
+          <input type="text" name="address" id="address">
+        </div>
+        <div style="align-self:flex-end;display:flex;gap:8px;">
+          <button class="btn success" type="submit" id="saveBtn">ثبت پرونده</button>
+          <button class="btn ghost" type="button" id="cancelEditBtn" style="display:none;">انصراف</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    <span>فهرست پرونده‌ها</span>
+    <input type="text" id="patientFilter" data-fadigits placeholder="جستجو در شماره یا نام..." style="max-width:260px;">
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl" id="patientTable">
+      <thead>
+        <tr><th>شماره پرونده</th><th>نام</th><th>نام خانوادگی</th><th>تلفن</th><th>جنسیت</th><th class="num">تعداد فاکتور</th><th>وضعیت</th><th>عملیات</th></tr>
+      </thead>
+      <tbody>
+      {% for p in patients %}
+        <tr data-id="{{ p.id }}" data-address="{{ p.address }}">
+          <td>{{ p.file_no }}</td>
+          <td>{{ p.first_name }}</td>
+          <td>{{ p.last_name }}</td>
+          <td>{{ p.phone }}</td>
+          <td>{{ p.gender_persian }}</td>
+          <td class="num">{{ p.invoice_count | fa }}</td>
+          <td>{% if p.is_active %}<span class="badge success">فعال</span>{% else %}<span class="badge muted">غیرفعال</span>{% endif %}</td>
+          <td>
+            <button class="btn sm outline" onclick="editPatient(this)">ویرایش</button>
+            {% if p.is_active %}
+            <button class="btn sm danger" onclick="deactivatePatient(this)">غیرفعال</button>
+            {% endif %}
+            {% if not p.invoice_count %}
+            <button class="btn sm danger" onclick="deletePatient(this)">حذف</button>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="empty">هیچ پرونده‌ای یافت نشد.</td></tr>
+      {% endfor %}
+        <tr id="noMatchRow" style="display:none;"><td colspan="8" class="empty">موردی با این جستجو یافت نشد.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const A = window.azaran40;
+const fmt = document.getElementById("patientForm");
+fmt.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const r = await A.postForm("/api/patients", fmt);
+    A.toast("بیمار ثبت شد.", "success");
+    setTimeout(() => location.reload(), 400);
+  } catch (err) { A.toast(err.message, "error"); }
+});
+
+function editPatient(btn) {
+  const tr = btn.closest("tr");
+  const cells = tr.querySelectorAll("td");
+  document.getElementById("patient_id").value = tr.dataset.id;
+  document.getElementById("file_no").value = cells[0].textContent;
+  document.getElementById("first_name").value = cells[1].textContent;
+  document.getElementById("last_name").value = cells[2].textContent;
+  document.getElementById("phone").value = cells[3].textContent;
+  document.getElementById("address").value = tr.dataset.address || "";
+  const sel = document.getElementById("gender");
+  const g = tr.dataset.gender || "";
+  sel.value = g;
+  document.getElementById("formTitle").textContent = "ویرایش پرونده";
+  document.getElementById("saveBtn").textContent = "ذخیره تغییرات";
+  document.getElementById("cancelEditBtn").style.display = "";
+  document.getElementById("file_no").disabled = true;
+  scrollTo({ top: 0, behavior: "smooth" });
+}
+document.getElementById("cancelEditBtn").addEventListener("click", resetForm);
+function resetForm() {
+  document.getElementById("patientForm").reset();
+  document.getElementById("patient_id").value = "";
+  document.getElementById("file_no").disabled = false;
+  document.getElementById("formTitle").textContent = "ثبت پرونده جدید";
+  document.getElementById("saveBtn").textContent = "ثبت پرونده";
+  document.getElementById("cancelEditBtn").style.display = "none";
+}
+
+async function deactivatePatient(btn) {
+  const tr = btn.closest("tr");
+  if (!A.confirmAsk("پرونده این بیمار غیرفعال شود؟")) return;
+  try {
+    await A.postJSON("/api/patients/" + tr.dataset.id + "/deactivate", {});
+    A.toast("غیرفعال شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+
+async function deletePatient(btn) {
+  const tr = btn.closest("tr");
+  if (!A.confirmAsk("پرونده برای همیشه حذف شود؟ این عمل برگشت‌پذیر نیست.")) return;
+  try {
+    const r = await fetch("/api/patients/" + tr.dataset.id, { method: "DELETE", credentials: "same-origin" });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.detail || "خطا"); }
+    A.toast("حذف شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+
+/* Search: digit-insensitive (English or Persian typing both work) and
+   word-wise, so "نام نام‌خانوادگی" together matches in any order. */
+const filterPatients = A.makeRowFilter(
+  document.getElementById("patientTable"),
+  document.getElementById("noMatchRow"));
+document.getElementById("patientFilter").addEventListener("input", (e) => {
+  filterPatients(e.target.value);
+});
+document.querySelectorAll("#patientTable tbody tr").forEach((tr) =>
+  tr.dataset.gender = tr.children[4].textContent === "آقا" ? "male" : (tr.children[4].textContent === "خانم" ? "female" : "")
+);
+</script>
+{% endblock %}

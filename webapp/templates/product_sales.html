@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}گزارش فروش محصولات — {{ app_title }}{% endblock %}
+{% block page_title %}گزارش فروش محصولات{% endblock %}
+{% block content %}
+<form class="card" method="get" action="/reports/products">
+  <div class="filter-box">
+    <div style="flex:1;min-width:160px;">
+      <label class="flabel">از تاریخ</label>
+      <input type="text" name="fdate" data-jdate value="{{ fdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="flex:1;min-width:160px;">
+      <label class="flabel">تا تاریخ</label>
+      <input type="text" name="tdate" data-jdate value="{{ tdate }}" placeholder="YYYY/MM/DD">
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn primary" type="submit">نمایش</button>
+    </div>
+  </div>
+</form>
+{% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+
+{% if report %}
+<div class="card-grid grid-4">
+  <div class="sum-card info"><span class="lbl">جمع فروش</span><span class="val">{{ report.total_revenue_f }}</span></div>
+  <div class="sum-card success"><span class="lbl">قیمت تمام‌شده</span><span class="val">{{ report.total_cost_f }}</span></div>
+  <div class="sum-card success"><span class="lbl">سود</span><span class="val">{{ report.total_profit_f }}</span></div>
+  <div class="sum-card"><span class="lbl">تعداد کل (عدد)</span><span class="val">{{ report.total_quantity | fa }}</span></div>
+</div>
+
+<div class="card">
+  <div class="card-title"><span>فروش به تفکیک محصول <span class="muted">({{ report.rows|length | fa }} ردیف)</span></span></div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>محصول</th><th class="num">تعداد</th><th class="num">فروش</th><th class="num">قیمت تمام‌شده</th><th class="num">سود</th></tr></thead>
+      <tbody>
+      {% for r in report.rows %}
+        <tr>
+          <td>{{ r.title }}</td>
+          <td class="num">{{ r.quantity | fa }}</td>
+          <td class="num">{{ r.row_total_f }}</td>
+          <td class="num">{{ r.row_cost_f }}</td>
+          <td class="num">{{ r.profit_f }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">فروشی در این بازه ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

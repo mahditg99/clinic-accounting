@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}گزارش مالی — {{ app_title }}{% endblock %}
+{% block page_title %}گزارش مالی دوره{% endblock %}
+{% block page_sub %}<div class="page-sub">خلاصه مالی ماهانه یا سالانه: دریافتی، هزینه و سود خالص</div>{% endblock %}
+{% block content %}
+<form class="card" method="get" action="/reports/financial">
+  <div class="filter-box">
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">دوره</label>
+      <select name="period" id="periodSel" onchange="togglePeriod()">
+        <option value="monthly" {{ 'selected' if period == 'monthly' }}>ماهانه</option>
+        <option value="yearly" {{ 'selected' if period == 'yearly' }}>سالانه</option>
+      </select>
+    </div>
+    <div style="flex:1;min-width:120px;">
+      <label class="flabel">سال خورشیدی</label>
+      <input type="text" name="year" value="{{ year | fa }}" data-fanum inputmode="numeric">
+    </div>
+    <div style="flex:1;min-width:130px;" id="monthWrap">
+      <label class="flabel">ماه</label>
+      <select name="month" id="monthSel">
+        {% for m in months %}
+        <option value="{{ loop.index }}" {{ 'selected' if month == loop.index }}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="align-self:flex-end;">
+      <button class="btn primary" type="submit">نمایش</button>
+    </div>
+  </div>
+</form>
+{% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+
+{% if profit %}
+<div class="card">
+  <h3 class="card-title">سود خالص</h3>
+  <div class="card-grid grid-5">
+    <div class="sum-card info"><span class="lbl">فروش ناخالص</span><span class="val">{{ profit.gross_sales_f }}</span></div>
+    <div class="sum-card warning"><span class="lbl">قیمت تمام‌شده</span><span class="val">{{ profit.cost_of_goods_sold_f }}</span></div>
+    <div class="sum-card success"><span class="lbl">سود ناخالص</span><span class="val">{{ profit.gross_profit_f }}</span></div>
+    <div class="sum-card danger"><span class="lbl">هزینه‌ها</span><span class="val">{{ profit.total_expenses_f }}</span></div>
+    <div class="sum-card success"><span class="lbl">سود خالص</span><span class="val">{{ profit.net_profit_f }}</span></div>
+  </div>
+  <p class="muted" style="font-size:12px;">سود ناخالص = فروش − قیمت تمام‌شده؛ سود خالص = سود ناخالص − هزینه‌ها.</p>
+  <div class="card-grid grid-2">
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>پزشک</th><th class="num">فروش</th><th class="num">هزینه</th><th class="num">سود</th></tr></thead>
+        <tbody>
+        {% for s in profit.summary_by_doctor %}
+          <tr><td>{{ s.doctor | fa }}</td><td class="num">{{ s.gross_sales_f }}</td><td class="num">{{ s.total_cost_f }}</td><td class="num">{{ s.profit_f }}</td></tr>
+        {% else %}
+          <tr><td colspan="4" class="empty">—</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>محصول</th><th class="num">تعداد</th><th class="num">فروش</th><th class="num">هزینه</th><th class="num">سود</th></tr></thead>
+        <tbody>
+        {% for s in profit.summary_by_product %}
+          <tr><td>{{ s.product }}</td><td class="num">{{ s.quantity | fa }}</td><td class="num">{{ s.row_total_f }}</td><td class="num">{{ s.row_cost_f }}</td><td class="num">{{ s.profit_f }}</td></tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">—</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if receipts %}
+<div class="card">
+  <h3 class="card-title">دریافتی <span class="muted">جمع: {{ receipts.total_f }}</span></h3>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>روش</th><th class="num">تعداد</th><th class="num">مبلغ</th></tr></thead>
+      <tbody>
+      {% for s in receipts.summary_by_method %}
+        <tr><td>{{ s.method }}</td><td class="num">{{ s.count | fa }}</td><td class="num">{{ s.amount_f }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">دریافتی در این دوره ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-wrap mt14">
+    <table class="tbl">
+      <thead><tr><th>بیمار</th><th>شماره فاکتور</th><th>تاریخ</th><th>زمان</th><th>نوع پرداخت</th><th class="num">مبلغ</th></tr></thead>
+      <tbody>
+      {% for p in receipts.payment_details %}
+        <tr><td>{{ p.patient_name }}</td><td>{{ (p.invoice_no or '—') | fa }}</td><td>{{ p.paid_at_j }}</td><td>{{ p.time_hm }}</td><td>{{ p.method }}</td><td class="num">{{ p.amount_f }}</td></tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">—</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if expenses_rep %}
+<div class="card">
+  <h3 class="card-title">هزینه‌ها <span class="muted">جمع: {{ expenses_rep.total_f }}</span></h3>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>دسته</th><th class="num">تعداد</th><th class="num">مبلغ</th></tr></thead>
+      <tbody>
+      {% for s in expenses_rep.summary_by_category %}
+        <tr><td>{{ s.category }}</td><td class="num">{{ s.count | fa }}</td><td class="num">{{ s.amount_f }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">هزینه‌ای در این دوره ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-wrap mt14">
+    <table class="tbl">
+      <thead><tr><th>تاریخ</th><th>دسته</th><th class="num">مبلغ</th><th>توضیحات</th></tr></thead>
+      <tbody>
+      {% for e in expenses_rep.expense_details %}
+        <tr><td>{{ e.expense_date_j }}</td><td>{{ e.category }}</td><td class="num">{{ e.amount_f }}</td><td>{{ e.description or '' }}</td></tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">—</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+function togglePeriod() {
+  const p = document.getElementById("periodSel").value;
+  document.getElementById("monthWrap").style.display = p === "monthly" ? "" : "none";
+}
+togglePeriod();
+</script>
+{% endblock %}

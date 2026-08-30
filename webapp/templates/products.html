@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}فهرست محصولات — {{ app_title }}{% endblock %}
+{% block page_title %}فهرست محصولات{% endblock %}
+{% block page_sub %}<div class="page-sub">مدیریت محصولات و موجودی انبار</div>{% endblock %}
+{% block content %}
+<div class="card add-card">
+  <h3 class="card-title" id="formTitle">ثبت محصول جدید</h3>
+  <form id="productForm" class="card-grid grid-4">
+    <input type="hidden" name="product_id" id="product_id">
+    <div class="form-row" style="grid-column:1/-1;">
+      <label class="flabel">نام محصول</label>
+      <input type="text" name="title" id="p_title" required>
+    </div>
+    <div class="form-row">
+      <label class="flabel">قیمت خرید</label>
+      <input type="text" name="purchase_price" id="p_purchase" data-money>
+    </div>
+    <div class="form-row">
+      <label class="flabel">قیمت فروش</label>
+      <input type="text" name="sale_price" id="p_sale" data-money>
+    </div>
+    <div class="form-row">
+      <label class="flabel">موجودی</label>
+      <input type="text" name="stock" id="p_stock" data-fanum inputmode="numeric" value="">
+    </div>
+    <div class="form-row">
+      <label class="flabel">سطح هشدار</label>
+      <input type="text" name="low_stock_warning" id="p_low" data-fanum inputmode="numeric" value="">
+    </div>
+    <div class="form-row" style="grid-column:1/-1;">
+      <label class="flabel">توضیحات</label>
+      <textarea name="description" id="p_desc"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn success" type="submit" id="saveBtn">افزودن محصول</button>
+      <button class="btn ghost" type="button" id="cancelEditBtn" style="display:none;">انصراف</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    <span>فهرست محصولات</span>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <label class="switch-row">
+        <span class="switch"><input type="checkbox" id="showInactive" {% if show_inactive %}checked{% endif %}><span class="slider"></span></span>
+        <span>نمایش غیرفعال / بدون موجودی</span>
+      </label>
+    </div>
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th>نام محصول</th><th class="num">قیمت خرید</th><th class="num">قیمت فروش</th><th class="num">موجودی</th><th class="num">سطح هشدار</th><th>وضعیت</th><th>عملیات</th></tr>
+      </thead>
+      <tbody>
+      {% for p in products %}
+        <tr data-id="{{ p.id }}" data-title="{{ p.title }}" data-purchase="{{ p.purchase_price_num if p.purchase_price_num is defined else '' }}" data-sale="{{ p.sale_price_num if p.sale_price_num is defined else '' }}" data-stock="{{ p.stock }}" data-low="{{ p.low_stock_warning }}" data-desc="{{ p.description }}" class="{{ 'row-out' if p.out_of_stock else ('row-low' if p.low_stock else '') }}">
+          <td>{{ p.title }}</td>
+          <td class="num">{{ p.purchase_price }}</td>
+          <td class="num">{{ p.sale_price }}</td>
+          <td class="num">{{ p.stock_p }}</td>
+          <td class="num">{{ p.low_stock_warning_p }}</td>
+          <td>
+            {% if p.out_of_stock %}<span class="badge danger">بدون موجودی</span>
+            {% elif p.low_stock %}<span class="badge warning">کم</span>
+            {% elif p.is_active %}<span class="badge success">فعال</span>
+            {% else %}<span class="badge muted">غیرفعال</span>{% endif %}
+          </td>
+          <td>
+            <button class="btn sm outline" onclick="editProduct(this)">ویرایش</button>
+            <button class="btn sm outline" onclick="newBatch(this)">شارژ مجدد</button>
+            {% if p.is_active %}
+            <button class="btn sm danger" onclick="deactivateProduct(this)">غیرفعال</button>
+            {% endif %}
+            <button class="btn sm danger" onclick="deleteProduct(this)">حذف</button>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">محصولی یافت نشد.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const A = window.azaran40;
+const pf = document.getElementById("productForm");
+pf.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await A.postForm("/api/products", pf);
+    A.toast("محصول ذخیره شد.", "success");
+    setTimeout(() => location.reload(), 400);
+  } catch (err) { A.toast(err.message, "error"); }
+});
+
+function setRaw(id, val) { const el = document.getElementById(id); if (el) el.value = val; }
+/* Programmatic fills bypass the input handlers, so format here: money fields
+   get Persian digits + separators, plain numeric fields get Persian digits. */
+function setMoney(id, val) { const el = document.getElementById(id); if (el) el.value = (val === "" || val == null) ? "" : A.fmtMoney(val); }
+function setNum(id, val) { const el = document.getElementById(id); if (el) el.value = (val === "" || val == null) ? "" : A.faDigits(val); }
+
+/* "شارژ مجدد": pre-fill the form as a NEW batch (new product record) so the
+   user can enter the new purchase/sale price and stock without corrupting the
+   historical cost of the existing batch. (item 3) */
+function newBatch(btn) {
+  const tr = btn.closest("tr");
+  document.getElementById("product_id").value = "";
+  setRaw("p_title", tr.dataset.title);
+  setMoney("p_purchase", tr.dataset.purchase || "");
+  setMoney("p_sale", tr.dataset.sale || "");
+  setNum("p_stock", "");
+  setNum("p_low", "");
+  setRaw("p_desc", "");
+  document.getElementById("formTitle").textContent = "شارژ مجدد (دسته جدید): " + tr.dataset.title;
+  document.getElementById("saveBtn").textContent = "افزودن دسته جدید";
+  document.getElementById("cancelEditBtn").style.display = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function editProduct(btn) {
+  const tr = btn.closest("tr");
+  document.getElementById("product_id").value = tr.dataset.id;
+  setRaw("p_title", tr.dataset.title);
+  setMoney("p_purchase", tr.dataset.purchase);
+  setMoney("p_sale", tr.dataset.sale);
+  setNum("p_stock", tr.dataset.stock);
+  setNum("p_low", tr.dataset.low);
+  setRaw("p_desc", tr.dataset.desc);
+  document.getElementById("formTitle").textContent = "ویرایش محصول";
+  document.getElementById("saveBtn").textContent = "ذخیره تغییرات";
+  document.getElementById("cancelEditBtn").style.display = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+document.getElementById("cancelEditBtn").addEventListener("click", () => {
+  pf.reset();
+  document.getElementById("product_id").value = "";
+  document.getElementById("formTitle").textContent = "ثبت محصول جدید";
+  document.getElementById("saveBtn").textContent = "افزودن محصول";
+  document.getElementById("cancelEditBtn").style.display = "none";
+});
+
+async function deactivateProduct(btn) {
+  const tr = btn.closest("tr");
+  if (!A.confirmAsk("این محصول غیرفعال شود؟")) return;
+  try {
+    await A.postJSON("/api/products/" + tr.dataset.id + "/deactivate", {});
+    A.toast("غیرفعال شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+async function deleteProduct(btn) {
+  const tr = btn.closest("tr");
+  if (!A.confirmAsk("محصول برای همیشه حذف شود؟")) return;
+  try {
+    const r = await fetch("/api/products/" + tr.dataset.id, { method: "DELETE", credentials: "same-origin" });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.detail || "خطا"); }
+    A.toast("حذف شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+document.getElementById("showInactive").addEventListener("change", (e) => {
+  location.href = "/products?show_inactive=" + (e.target.checked ? 1 : 0);
+});
+</script>
+{% endblock %}

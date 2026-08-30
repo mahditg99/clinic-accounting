@@ -1,0 +1,36 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- Build output: the .exe is deliberately NOT published ----
+build/
+dist/
+*.manifest
+
+# ---- Local data, backups and secrets ----
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+backups/
+keys/
+license.key
+*.key
+.session_secret
+
+# ---- Dev-only artifacts (regenerate with shot_desktop.py / _licshot.py) ----
+shots/
+_tmp*/
+*.tmp
+.license-*
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.rar

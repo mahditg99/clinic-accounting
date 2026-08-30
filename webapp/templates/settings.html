@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}تنظیمات — {{ app_title }}{% endblock %}
+{% block page_title %}تنظیمات{% endblock %}
+{% block content %}
+<form class="card" action="/settings/general" method="post">
+  <h3 class="card-title">تنظیمات عمومی</h3>
+  <div class="filter-box">
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">عنوان برنامه</label>
+      <input type="text" name="app_title" value="{{ app_title_value }}">
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">اندازه چاپ</label>
+      <select name="print_size">
+        <option value="A4" {{ 'selected' if print_size == 'A4' }}>A4</option>
+        <option value="A5" {{ 'selected' if print_size == 'A5' }}>A5</option>
+      </select>
+    </div>
+  </div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:6px;">
+    <label class="switch-row">
+      <span class="switch"><input type="checkbox" name="update_invoice_date_on_edit" {% if update_invoice_date_on_edit %}checked{% endif %}><span class="slider"></span></span>
+      <span>به‌روزرسانی تاریخ صدور هنگام ویرایش فاکتور</span>
+    </label>
+    <label class="switch-row">
+      <span class="switch"><input type="checkbox" name="show_doctor_in_print" {% if show_doctor_in_print %}checked{% endif %}><span class="slider"></span></span>
+      <span>نمایش نام پزشک در چاپ</span>
+    </label>
+  </div>
+  {% if version %}<div class="muted" style="margin-top:8px;">نسخه: {{ version | fa }}</div>{% endif %}
+  <div style="margin-top:16px;">
+    <button class="btn primary" type="submit">ذخیره تنظیمات</button>
+  </div>
+</form>
+
+<div class="card">
+  <h3 class="card-title">روش‌های پرداخت</h3>
+  <div id="methodsWrap" class="list-editor"></div>
+  <div class="filter-box" style="margin-top:10px;">
+    <div style="flex:2;min-width:150px;"><input type="text" id="methodInput" placeholder="روش پرداخت جدید"></div>
+    <div><button class="btn outline" onclick="Methods.add()">افزودن</button></div>
+  </div>
+  <div style="margin-top:10px;"><button class="btn success" onclick="Methods.save()">ذخیره روش‌های پرداخت</button></div>
+</div>
+
+<div class="card">
+  <h3 class="card-title">دسته‌بندی هزینه‌ها</h3>
+  <div id="catsWrap" class="list-editor"></div>
+  <div class="filter-box" style="margin-top:10px;">
+    <div style="flex:2;min-width:150px;"><input type="text" id="catInput" placeholder="دسته هزینه جدید"></div>
+    <div><button class="btn outline" onclick="Cats.add()">افزودن</button></div>
+  </div>
+  <div style="margin-top:10px;"><button class="btn success" onclick="Cats.save()">ذخیره دسته‌بندی‌ها</button></div>
+</div>
+
+<div class="card">
+  <h3 class="card-title">پشتیبان‌گیری <span class="muted">نسخه امن از کل اطلاعات</span></h3>
+  <p class="muted" style="margin:0 0 12px;">هر پشتیبان یک فایل کامل پایگاه داده است. پیش از بازیابی، به‌طور خودکار از وضعیت فعلی پشتیبان ساخته می‌شود.</p>
+  <form action="/settings/backup" method="post" style="margin-bottom:14px;">
+    <button class="btn primary" type="submit">تهیه پشتیبان فوری</button>
+  </form>
+  <div class="tbl-wrap">
+    <table class="tbl">
+      <thead>
+        <tr><th>تاریخ</th><th>ساعت</th><th class="num">حجم</th><th>فایل</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for b in backups %}
+        <tr>
+          <td style="white-space:nowrap;">{{ b.date | fa }}</td>
+          <td style="white-space:nowrap;" class="num">{{ b.time | fa }}</td>
+          <td class="num" style="white-space:nowrap;">{{ b.size_kb | fa }} کیلوبایت</td>
+          <td class="muted" style="font-size:12px;white-space:nowrap;">{{ b.name }}</td>
+          <td class="actions-cell">
+            <a class="btn ghost sm" href="/settings/backup/{{ b.name }}">دانلود</a>
+            <form method="post" action="/settings/backup/{{ b.name }}/restore" style="display:inline;"
+                  onsubmit="return confirm('اطلاعات فعلی با این پشتیبان جایگزین شود؟\n\nنسخه امنی از وضعیت فعلی پیش از بازیابی ساخته می‌شود.');">
+              <button class="btn warn sm" type="submit">بازیابی</button>
+            </form>
+            <form method="post" action="/settings/backup/{{ b.name }}/delete" style="display:inline;"
+                  onsubmit="return confirm('این پشتیبان حذف شود؟');">
+              <button class="btn danger sm" type="submit">حذف</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">هنوز پشتیبانی وجود ندارد — با دکمه بالا اولین نسخه پشتیبان را بسازید.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const A = window.azaran40;
+const METHODS = {{ methods | tojson }};
+const CATEGORIES = {{ categories | tojson }};
+
+function ListUI(wrapId, items) {
+  const wrap = document.getElementById(wrapId);
+  const render = () => {
+    wrap.innerHTML = items.map((it, i) =>
+      '<div class="list-row" style="display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;margin-bottom:6px;">' +
+      '<span style="flex:1;">' + it + '</span>' +
+      '<button class="btn ghost sm" onclick="' + (wrapId === "methodsWrap" ? "Methods" : "Cats") + '.remove(' + i + ')">حذف</button>' +
+      '</div>').join("");
+  };
+  return {
+    render: render,
+    add() {
+      const inp = wrapId === "methodsWrap" ? document.getElementById("methodInput")
+                                          : document.getElementById("catInput");
+      const v = inp.value.trim();
+      if (!v) { A.toast("مقدار را وارد کنید.", "error"); return; }
+      if (items.includes(v)) { A.toast("این مورد قبلا وجود دارد.", "error"); return; }
+      items.push(v); inp.value = ""; render();
+    },
+    remove(i) { items.splice(i, 1); render(); },
+    get items() { return items.slice(); },
+  };
+}
+const Methods = ListUI("methodsWrap", METHODS);
+const Cats = ListUI("catsWrap", CATEGORIES);
+Methods.render();
+Cats.render();
+
+async function postJSON(url, items) {
+  try {
+    const r = await fetch(url, { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items) });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.detail || "خطا"); }
+    A.toast("ذخیره شد.", "success");
+  } catch (err) { A.toast(err.message, "error"); }
+}
+Methods.save = () => postJSON("/api/settings/methods", { methods: Methods.items });
+Cats.save = () => postJSON("/api/settings/categories", { categories: Cats.items });
+</script>
+{% endblock %}

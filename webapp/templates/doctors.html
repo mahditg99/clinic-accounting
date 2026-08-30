@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}پزشکان — {{ app_title }}{% endblock %}
+{% block page_title %}پزشکان{% endblock %}
+{% block page_sub %}<div class="page-sub">مدیریت پزشکان معرف</div>{% endblock %}
+{% block content %}
+<div class="card add-card">
+  <h3 class="card-title" id="docFormTitle">افزودن پزشک</h3>
+  <div class="filter-box">
+    <input type="hidden" id="docId">
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">نام</label>
+      <input type="text" id="docFirst" placeholder="نام">
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">نام خانوادگی</label>
+      <input type="text" id="docLast" placeholder="نام خانوادگی">
+    </div>
+    <div style="flex:1;min-width:140px;">
+      <label class="flabel">تخصص</label>
+      <input type="text" id="docSpecialty" placeholder="تخصص">
+    </div>
+    <div style="flex:1;min-width:160px;">
+      <label class="flabel">آدرس مطب</label>
+      <input type="text" id="docAddress" placeholder="آدرس">
+    </div>
+    <div style="flex:1;min-width:130px;">
+      <label class="flabel">شماره تلفن</label>
+      <input type="text" id="docPhone" placeholder="تلفن" data-fanum inputmode="numeric">
+    </div>
+    <div style="align-self:flex-end;display:flex;gap:8px;">
+      <button class="btn success" id="docSaveBtn" onclick="saveDoctor()">افزودن</button>
+      <button class="btn ghost" id="docCancelBtn" style="display:none;" onclick="resetDocForm()">انصراف</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    <span>فهرست پزشکان</span>
+    <input type="text" id="docFilter" data-fadigits placeholder="جستجو در نام، تخصص، تلفن..." style="max-width:260px;">
+  </div>
+  <div class="tbl-wrap">
+    <table class="tbl" id="docTable">
+      <thead><tr><th>نام</th><th>نام خانوادگی</th><th>تخصص</th><th>آدرس</th><th>تلفن</th><th>وضعیت</th><th>عملیات</th></tr></thead>
+      <tbody>
+      {% for d in doctors %}
+        <tr data-id="{{ d.id }}"
+            data-first="{{ d.first_name or d.name }}"
+            data-last="{{ d.last_name or '' }}"
+            data-specialty="{{ d.specialty or '' }}"
+            data-address="{{ d.address or '' }}"
+            data-phone="{{ d.phone or '' }}"
+            data-name="{{ d.name }}">
+          <td>{{ (d.first_name or d.name) | fa }}</td>
+          <td>{{ d.last_name | fa }}</td>
+          <td>{{ d.specialty or '—' }}</td>
+          <td>{{ d.address or '—' }}</td>
+          <td class="num">{{ (d.phone or '—') | fa }}</td>
+          <td>{% if d.is_active %}<span class="badge success">فعال</span>{% else %}<span class="badge muted">غیرفعال</span>{% endif %}</td>
+          <td>
+            {% if d.name == no_doctor %}
+              <span class="badge muted">پیش‌فرض</span>
+            {% else %}
+              <button class="btn sm outline" onclick="editDoctor(this)">ویرایش</button>
+              {% if d.is_active %}
+              <button class="btn sm danger" onclick="deactivateDoc(this)">غیرفعال</button>
+              {% endif %}
+              <button class="btn sm danger" onclick="deleteDoc(this)">حذف</button>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">پزشکی ثبت نشده است.</td></tr>
+      {% endfor %}
+        <tr id="noDocMatchRow" style="display:none;"><td colspan="7" class="empty">موردی با این جستجو یافت نشد.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const A = window.azaran40;
+/* Search: digit-insensitive and word-wise (نام + نام خانوادگی با هم). */
+const filterDoctors = A.makeRowFilter(
+  document.getElementById("docTable"),
+  document.getElementById("noDocMatchRow"));
+document.getElementById("docFilter").addEventListener("input", (e) => {
+  filterDoctors(e.target.value);
+});
+function editDoctor(btn) {
+  const tr = btn.closest("tr");
+  document.getElementById("docId").value = tr.dataset.id;
+  document.getElementById("docFirst").value = tr.dataset.first || "";
+  document.getElementById("docLast").value = tr.dataset.last || "";
+  document.getElementById("docSpecialty").value = tr.dataset.specialty || "";
+  document.getElementById("docAddress").value = tr.dataset.address || "";
+  document.getElementById("docPhone").value = A.faDigits(tr.dataset.phone || "");
+  document.getElementById("docFormTitle").textContent = "ویرایش پزشک";
+  document.getElementById("docSaveBtn").textContent = "ذخیره";
+  document.getElementById("docCancelBtn").style.display = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function resetDocForm() {
+  document.getElementById("docId").value = "";
+  ["docFirst","docLast","docSpecialty","docAddress","docPhone"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("docFormTitle").textContent = "افزودن پزشک";
+  document.getElementById("docSaveBtn").textContent = "افزودن";
+  document.getElementById("docCancelBtn").style.display = "none";
+}
+async function saveDoctor() {
+  const id = document.getElementById("docId").value;
+  const first = document.getElementById("docFirst").value.trim();
+  const last = document.getElementById("docLast").value.trim();
+  const specialty = document.getElementById("docSpecialty").value.trim();
+  const address = document.getElementById("docAddress").value.trim();
+  const phone = document.getElementById("docPhone").value.trim();
+  if (!first && !last) { A.toast("نام پزشک را وارد کنید.", "error"); return; }
+  try {
+    const f = new FormData();
+    f.append("first_name", first);
+    f.append("last_name", last);
+    f.append("specialty", specialty);
+    f.append("address", address);
+    f.append("phone", phone);
+    const url = id ? ("/api/doctors/" + id) : "/api/doctors";
+    const r = await fetch(url, { method: id ? "PUT" : "POST", body: f, credentials: "same-origin" });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.detail || "خطا"); }
+    A.toast(id ? "پزشک به‌روزرسانی شد." : "پزشک افزوده شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+async function deactivateDoc(btn) {
+  const tr = btn.closest("tr");
+  if (!A.confirmAsk("این پزشک غیرفعال شود؟")) return;
+  try {
+    await A.postJSON("/api/doctors/" + tr.dataset.id + "/deactivate", {});
+    A.toast("غیرفعال شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+async function deleteDoc(btn) {
+  const tr = btn.closest("tr");
+  if (!A.confirmAsk("این پزشک حذف شود؟")) return;
+  try {
+    const r = await fetch("/api/doctors/" + tr.dataset.id, { method: "DELETE", credentials: "same-origin" });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.detail || "خطا"); }
+    A.toast("حذف شد.", "success");
+    setTimeout(() => location.reload(), 300);
+  } catch (err) { A.toast(err.message, "error"); }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}فاکتور شماره {{ inv.invoice_no | fa }} — {{ app_title }}{% endblock %}
+{% block page_title %}فاکتور شماره {{ inv.invoice_no | fa }}{% endblock %}
+{% block page_sub %}<div class="page-sub">مشاهده و چاپ فاکتور</div>{% endblock %}
+{% block content %}
+<div class="card print-area">
+  <div class="invoice-head">
+    <div class="ih-left">
+      <div class="app-name">{{ app_title }}</div>
+      <h2 class="invoice-title">{{ inv.patient_name or 'بیمار' }}</h2>
+      <div class="inv-meta">
+        <span>شماره پرونده: <b>{{ inv.file_no | fa if inv.file_no else '—' }}</b></span>
+        <span>تاریخ صدور: <b>{{ issued_j }}</b></span>
+        <span id="doctorLine" {% if not show_doctor %}style="display:none;"{% endif %}>پزشک معالج: <b>{{ (inv.doctor_name or 'بدون معرف') | fa }}</b></span>
+      </div>
+      {% if inv.notes %}<div class="inv-notes">{{ inv.notes }}</div>{% endif %}
+    </div>
+    <div class="inv-clip">
+      <span class="ic-lbl">شماره فاکتور</span>
+      <span class="ic-no">{{ inv.invoice_no | fa }}</span>
+      <span class="ic-line" aria-hidden="true"></span>
+      <span class="ic-date">{{ issued_j }}</span>
+    </div>
+  </div>
+  <div class="inv-rule" aria-hidden="true"></div>
+
+  <div class="tbl-wrap mt16">
+    <table class="tbl">
+      <thead>
+        <tr><th>نام کالا / خدمت</th><th class="num">تعداد</th><th class="num">فی</th><th class="num">جمع</th></tr>
+      </thead>
+      <tbody>
+      {% for it in items %}
+        <tr>
+          <td>{{ it.title }}</td>
+          <td class="num">{{ it.quantity | fa }}</td>
+          <td class="num">{{ fmt_money(it.unit_price) }}</td>
+          <td class="num">{{ fmt_money(it.unit_price * it.quantity) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">اقلامی ثبت نشده است.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="settle">
+    <div class="settle-row"><span>جمع کل</span><b>{{ fmt_money(inv.total_amount) }}</b></div>
+    <div class="settle-row paid"><span>پرداخت‌شده</span><b>{{ fmt_money(paid) }}</b></div>
+    <div class="settle-row due {{ 'settled' if remaining == 0 }}"><span>باقی‌مانده</span><b>{{ fmt_money(remaining) }}</b></div>
+  </div>
+
+  {% if payments %}
+  <div class="mt16">
+    <h3 class="card-title">پرداخت‌ها</h3>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>روش پرداخت</th><th class="num">مبلغ</th></tr></thead>
+        <tbody>
+        {% for p in payments %}
+          <tr><td>{{ p.method }}</td><td class="num">{{ fmt_money(p.amount) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:24px;" class="print-hide">
+    <button class="btn primary" onclick="window.print()">چاپ</button>
+    <label class="switch-row" style="margin:0 8px;">
+      <span class="switch"><input type="checkbox" id="showDocToggle" {{ 'checked' if show_doctor }} onchange="toggleShowDoctor()"><span class="slider"></span></span>
+      <span>نمایش نام پزشک معالج</span>
+    </label>
+    <a class="btn outline" href="/invoice/{{ inv.id }}/edit">ویرایش</a>
+    <a class="btn ghost" href="/invoices">بازگشت به آرشیو</a>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function toggleShowDoctor() {
+  const on = document.getElementById("showDocToggle").checked;
+  document.getElementById("doctorLine").style.display = on ? "" : "none";
+}
+</script>
+<style>
+@media print {
+  .sidebar, .topbar, .content > .actions, .print-hide { display:none !important; }
+  .main { margin-right:0 !important; }
+}
+</style>
+{% endblock %}
