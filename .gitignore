@@ -17,7 +17,7 @@ dist/
 *.sqlite
 *.sqlite3
 backups/
-keys/
+
 license.key
 *.key
 .session_secret

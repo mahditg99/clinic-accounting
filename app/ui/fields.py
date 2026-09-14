@@ -516,8 +516,14 @@ def _apply_sort(view, col, order):
     if col is None or col < 0:
         view._sort_col = -1
         return
+    ext = getattr(view, "_ext_sort_cb", None)
     view._sort_col = col
     view._sort_order = order
+    if ext is not None:
+        # External (SQL) sort: the page reloads the *whole* dataset sorted
+        # and re-paginates it — sorting only the visible page would lie.
+        ext(col, order)
+        return
     # Persistent index widgets follow their rows through the sort; the
     # lazy fit pass then just re-positions what is visible.
     view.model().sort(col, order)
@@ -528,10 +534,31 @@ def resort(view):
     # type: (Any) -> None
     """Re-apply the active header sort after a page refilled its rows."""
     col = getattr(view, "_sort_col", -1)
+    order = getattr(view, "_sort_order", _Core.Qt.AscendingOrder)
+    if getattr(view, "_ext_sort_cb", None) is not None:
+        # Rows already arrive sorted from SQL — sync the header indicator
+        # only (never client-sort, never re-enter the callback).
+        hdr = view.horizontalHeader()
+        hdr.blockSignals(True)
+        if col is not None and col >= 0:
+            hdr.setSortIndicator(col, order)
+        hdr.blockSignals(False)
+        return
     if col is not None and col >= 0:
-        view.model().sort(col, getattr(view, "_sort_order",
-                                       _Core.Qt.AscendingOrder))
+        view.model().sort(col, order)
         view.schedule_fit()
+
+
+def set_sort_state(view, col, order):
+    # type: (Any, int, Any) -> None
+    """Silently set the active sort state + header indicator. Used to revert
+    clicks on non-sortable columns, or to pre-mark the default sort."""
+    view._sort_col = -1 if col is None else col
+    view._sort_order = order
+    hdr = view.horizontalHeader()
+    hdr.blockSignals(True)
+    hdr.setSortIndicator(view._sort_col, order)
+    hdr.blockSignals(False)
 
 
 class _PulseTable(_W.QTableView):
@@ -565,6 +592,13 @@ class _PulseTable(_W.QTableView):
         self._rw_col = col
         self._rw_factory = factory
         self.schedule_fit()
+
+    def set_external_sort(self, callback):
+        # type: (Any) -> None
+        """Header clicks call ``callback(col, order)`` instead of sorting
+        the in-memory model — for paged tables whose rows come from SQL,
+        so the sort spans the *whole* dataset, not just the visible page."""
+        self._ext_sort_cb = callback
 
     def schedule_fit(self):
         if not getattr(self, "_fit_pending", False):
@@ -771,6 +805,96 @@ def set_rows(view, rows):
         items = [make_item(val) for val in row]
         model.appendRow(items)
     resort(view)
+
+
+class PagerRow(_W.QWidget):
+    """Paging strip with DIRECT page jump (no one-by-one walking):
+    «first ‹prev [صفحه ▾] next› »last» plus a «نمایش ۵۱ تا ۱۰۰ از ۵۸۹»
+    info label. The page chooser is a combo listing every page, so jumping
+    from 1 to 12 is a single pick. Emits page_requested(0-based page)."""
+
+    page_requested = _Core.Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setLayoutDirection(_Core.Qt.RightToLeft)
+        self._page = 0
+        self._pages = 1
+        self._guard = False
+        h = _W.QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        self.first_btn = self._nav_btn("«")
+        self.prev_btn = self._nav_btn("‹")
+        self.next_btn = self._nav_btn("›")
+        self.last_btn = self._nav_btn("»")
+        self.first_btn.clicked.connect(lambda: self._jump(0))
+        self.prev_btn.clicked.connect(lambda: self._jump(self._page - 1))
+        self.next_btn.clicked.connect(lambda: self._jump(self._page + 1))
+        self.last_btn.clicked.connect(lambda: self._jump(self._pages - 1))
+        self.combo = _W.QComboBox()
+        self.combo.setMinimumWidth(86)
+        self.combo.currentIndexChanged.connect(self._on_combo)
+        of_lbl = _W.QLabel("از")
+        of_lbl.setStyleSheet("color:#5d7385; font-size:11px;")
+        self.total_pages_lbl = _W.QLabel("۱")
+        self.total_pages_lbl.setStyleSheet("color:#5d7385; font-size:11px;")
+        self.info = _W.QLabel("")
+        self.info.setStyleSheet("color:#5d7385; font-size:11px;")
+        h.addWidget(self.first_btn)
+        h.addWidget(self.prev_btn)
+        h.addWidget(self.combo)
+        h.addWidget(of_lbl)
+        h.addWidget(self.total_pages_lbl)
+        h.addWidget(self.next_btn)
+        h.addWidget(self.last_btn)
+        h.addStretch(1)
+        h.addWidget(self.info)
+
+    @staticmethod
+    def _nav_btn(text):
+        b = _W.QPushButton(text)
+        b.setProperty("variant", "link")
+        b.setProperty("btnsize", "xs")
+        b.setFixedWidth(34)
+        b.setCursor(_Core.Qt.PointingHandCursor)
+        return b
+
+    def _jump(self, p0):
+        if 0 <= p0 < self._pages and p0 != self._page:
+            self.page_requested.emit(p0)
+
+    def _on_combo(self, idx):
+        if not self._guard and idx >= 0:
+            self._jump(idx)
+
+    def set_state(self, page, pages, first, last, total):
+        """Refresh the strip (never emits page_requested).
+
+        page is 0-based; first/last are the 1-based display range of the
+        current slice (pass 0/0 when total == 0).
+        """
+        self._pages = max(1, int(pages))
+        self._page = min(max(0, int(page)), self._pages - 1)
+        self.first_btn.setEnabled(self._page > 0)
+        self.prev_btn.setEnabled(self._page > 0)
+        self.next_btn.setEnabled(self._page < self._pages - 1)
+        self.last_btn.setEnabled(self._page < self._pages - 1)
+        self.total_pages_lbl.setText(fa(self._pages))
+        self._guard = True
+        try:
+            if self.combo.count() != self._pages:
+                self.combo.clear()
+                for i in range(self._pages):
+                    self.combo.addItem("صفحه %s" % fa(i + 1))
+            self.combo.setCurrentIndex(self._page)
+        finally:
+            self._guard = False
+        if total <= 0:
+            self.info.setText("هیچ موردی یافت نشد")
+        else:
+            self.info.setText("نمایش %s تا %s از %s" % (
+                fa(first), fa(last), fa(total)))
 
 
 def row_of(view, row):

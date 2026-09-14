@@ -42,6 +42,7 @@
   <div class="card-title">
     <span>فهرست محصولات</span>
     <div style="display:flex;gap:12px;align-items:center;">
+      <input type="search" id="pSearch" placeholder="جستجوی محصول…" style="min-width:220px;">
       <label class="switch-row">
         <span class="switch"><input type="checkbox" id="showInactive" {% if show_inactive %}checked{% endif %}><span class="slider"></span></span>
         <span>نمایش غیرفعال / بدون موجودی</span>
@@ -49,7 +50,7 @@
     </div>
   </div>
   <div class="tbl-wrap">
-    <table class="tbl">
+    <table class="tbl" id="productsTbl">
       <thead>
         <tr><th>نام محصول</th><th class="num">قیمت خرید</th><th class="num">قیمت فروش</th><th class="num">موجودی</th><th class="num">سطح هشدار</th><th>وضعیت</th><th>عملیات</th></tr>
       </thead>
@@ -81,6 +82,16 @@
       {% endfor %}
       </tbody>
     </table>
+  </div>
+  <!-- Direct-jump pager (50 per page), filtered set first, then paged. -->
+  <div id="pPager" style="display:none;gap:8px;align-items:center;padding-top:10px;">
+    <button class="btn ghost sm" type="button" id="pgFirst" title="نخستین">«</button>
+    <button class="btn ghost sm" type="button" id="pgPrev" title="قبلی">‹</button>
+    <select id="pgSel" style="min-width:100px;"></select>
+    <span style="color:#5d7385;font-size:12px;">از <b id="pgTotal">۱</b></span>
+    <button class="btn ghost sm" type="button" id="pgNext" title="بعدی">›</button>
+    <button class="btn ghost sm" type="button" id="pgLast" title="آخرین">»</button>
+    <span style="margin-inline-start:auto;color:#5d7385;font-size:12px;" id="pgInfo"></span>
   </div>
 </div>
 {% endblock %}
@@ -165,5 +176,63 @@ async function deleteProduct(btn) {
 document.getElementById("showInactive").addEventListener("change", (e) => {
   location.href = "/products?show_inactive=" + (e.target.checked ? 1 : 0);
 });
+
+/* ---- products search + direct-jump paging (Qt parity) ------------------- */
+const P_PAGE = 50;
+const pRows = Array.from(document.querySelectorAll("#productsTbl tbody tr[data-id]"));
+const pEmptyRow = document.querySelector("#productsTbl tbody tr:not([data-id])");
+const pSearch = document.getElementById("pSearch");
+const pPager = document.getElementById("pPager");
+const pSel = document.getElementById("pgSel");
+let pPage = 0;
+
+function pNorm(s) {
+  return A.enDigits(String(s == null ? "" : s)).replace(/\u200c/g, " ").toLowerCase();
+}
+function pFiltered() {
+  const words = pNorm(pSearch.value.trim()).split(/\s+/).filter(Boolean);
+  if (!words.length) return pRows;
+  return pRows.filter(tr => {
+    const hay = pNorm(tr.textContent + " " + (tr.dataset.desc || "") + " " + (tr.dataset.title || ""));
+    return words.every(w => hay.indexOf(w) !== -1);
+  });
+}
+function pRender() {
+  const shown = pFiltered();
+  const pages = Math.max(1, Math.ceil(shown.length / P_PAGE));
+  pPage = Math.min(Math.max(0, pPage), pages - 1);
+  pRows.forEach(tr => { tr.style.display = "none"; });
+  shown.slice(pPage * P_PAGE, (pPage + 1) * P_PAGE).forEach(tr => { tr.style.display = ""; });
+  if (pEmptyRow) pEmptyRow.style.display = (shown.length || !pRows.length) ? "none" : "";
+  const pagerOn = shown.length > P_PAGE;
+  pPager.style.display = pagerOn ? "flex" : "none";
+  if (pagerOn) {
+    if (pSel.options.length !== pages) {
+      pSel.innerHTML = "";
+      for (let i = 0; i < pages; i++) {
+        const o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = "صفحه " + A.faDigits(i + 1);
+        pSel.appendChild(o);
+      }
+    }
+    pSel.value = String(pPage);
+    document.getElementById("pgTotal").textContent = A.faDigits(pages);
+    const first = pPage * P_PAGE + 1;
+    const last = Math.min(shown.length, (pPage + 1) * P_PAGE);
+    document.getElementById("pgInfo").textContent =
+      "نمایش " + A.faDigits(first) + " تا " + A.faDigits(last) + " از " + A.faDigits(shown.length);
+    document.getElementById("pgFirst").disabled = document.getElementById("pgPrev").disabled = pPage === 0;
+    document.getElementById("pgNext").disabled = document.getElementById("pgLast").disabled = pPage >= pages - 1;
+  }
+}
+function pGo(p) { pPage = p; pRender(); }
+pSearch.addEventListener("input", () => { pPage = 0; pRender(); });
+pSel.addEventListener("change", () => pGo(parseInt(pSel.value, 10) || 0));
+document.getElementById("pgFirst").addEventListener("click", () => pGo(0));
+document.getElementById("pgPrev").addEventListener("click", () => pGo(pPage - 1));
+document.getElementById("pgNext").addEventListener("click", () => pGo(pPage + 1));
+document.getElementById("pgLast").addEventListener("click", () => pGo(1e9));
+pRender();
 </script>
 {% endblock %}

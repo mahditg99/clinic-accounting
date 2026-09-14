@@ -83,6 +83,21 @@ function toggleShowDoctor() {
   const on = document.getElementById("showDocToggle").checked;
   document.getElementById("doctorLine").style.display = on ? "" : "none";
 }
+/* Post-save flow (from invoice_new): confirm the save, then open the
+   browser's print preview once the page has painted — the user prints
+   only if they confirm in that dialog. */
+(function () {
+  const params = new URLSearchParams(location.search);
+  if (params.get("saved")) {
+    window.azaran40.toast("فاکتور با موفقیت ذخیره شد.", "success");
+  }
+  if (params.get("print") === "1") {
+    params.delete("print"); params.delete("saved");
+    const qs = params.toString();
+    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : ""));
+    setTimeout(() => window.print(), 350);
+  }
+})();
 </script>
 <style>
 @media print {

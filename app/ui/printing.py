@@ -140,34 +140,166 @@ def build_proforma_html(data):
         data.get("rows", []) or [], total, paid, total - paid)
 
 
+def build_saved_invoice_html(invoice_id):
+    # type: (int) -> Optional[str]
+    """Print HTML for a persisted invoice — the single builder behind the
+    archive's «مشاهده / چاپ» and the post-save print preview."""
+    from .. import models, settings as settings_mod
+    inv = models.get_invoice(invoice_id)
+    if inv is None:
+        return None
+    items = models.list_invoice_items(invoice_id)
+    paid = models.invoice_paid_sum(invoice_id)
+    return build_invoice_html({
+        "app_title": settings_mod.get_setting("app_title", "آذران طب"),
+        "invoice_no": inv["invoice_no"],
+        "issued_at": inv["issued_at"],
+        "patient_name": "%s %s" % (inv["first_name"], inv["last_name"]),
+        "file_no": inv["file_no"],
+        "doctor_name": inv.get("doctor_name") or "",
+        "show_doctor": settings_mod.get_setting("show_doctor_in_print",
+                                                "0") == "1",
+        "notes": inv.get("notes") or "",
+        "rows": [{"title": it["title"], "unit_price": it["unit_price"],
+                  "quantity": it["quantity"], "row_total": it["row_total"]}
+                 for it in items],
+        "total": int(inv["total_amount"]),
+        "paid": paid,
+        "remaining": int(inv["total_amount"]) - paid,
+    })
+
+
+def show_invoice_preview(parent, invoice_id):
+    # type: (Any, int) -> None
+    """Open the A4-portrait print preview for a saved invoice. The preview
+    dialog carries its own print button, so the user prints only if they
+    want."""
+    html = build_saved_invoice_html(invoice_id)
+    if html:
+        show_print_preview(parent, html)
+
+
+def _printer_mode():
+    # type: () -> Any
+    """QPrinter.HighResolution works everywhere it is exposed; never crash
+    the preview if a binding reshuffles the enum (Qt6 scoped modes)."""
+    qps = _Print.QPrinter
+    for holder in (qps, getattr(qps, "PrinterMode", None)):
+        v = getattr(holder, "HighResolution", None)
+        if v is not None:
+            return v
+    return 0
+
+
+def _portrait_value():
+    # type: () -> Optional[Any]
+    """Portrait orientation constant for the active binding.
+
+    Qt5: QPrinter.Portrait (PyQt5) / QPrinter.PageOrientation.Portrait
+    (PySide2).  There is *no* Qt.Portrait in Qt5 — reading it off QtCore.Qt
+    raised AttributeError and crashed the archive preview.
+    Qt6 (defensive): QPageLayout.Orientation.Portrait.
+    """
+    qps = _Print.QPrinter
+    v = getattr(qps, "Portrait", None)          # PyQt5
+    if v is not None:
+        return v
+    po = getattr(qps, "PageOrientation", None)  # PySide2 / newer PyQt5
+    v = getattr(po, "Portrait", None)
+    if v is not None:
+        return v
+    gl = getattr(_Gui, "QPageLayout", None)     # Qt6-style fallback
+    v = getattr(getattr(gl, "Orientation", None), "Portrait", None)
+    return v
+
+
+def _setup_a4_portrait(printer):
+    # type: (_Print.QPrinter) -> None
+    try:
+        printer.setPaperSize(_Print.QPrinter.A4)
+    except Exception:
+        pass
+    orient = _portrait_value()
+    if orient is not None:
+        try:
+            printer.setPageOrientation(orient)
+        except Exception:
+            # Portrait is the QPrinter default anyway; a failed enum call
+            # must never take the whole preview down with it.
+            pass
+
+
+def _doc_print(doc, printer):
+    # type: (Any, Any) -> None
+    """Print a document with CSS px kept at their 96dpi physical size.
+
+    Qt lays out QTextDocument at 1 CSS px = 1 *device* px of the paint
+    device.  On a QPrinter(HighResolution) (1200 dpi on Windows) that
+    shrinks the whole invoice to a ~1mm-tall band of microscopic text —
+    measured: 8.3x2.7in content on an 8.3x11.7 page, which is the "preview
+    page is tiny" report.  Normalizing the printer's logical resolution to
+    96 restores the expected sizes; text still renders vector-crisp at the
+    printer's native DPI, and Qt's own paginated print() keeps multi-page
+    invoices paginating (this binding does not expose the manual
+    page-by-page layout-draw overload, so do not try to reimplement it).
+    """
+    try:
+        if printer.logicalDpiX() >= 120:
+            printer.setResolution(96)
+    except Exception:
+        pass
+    doc.print_(printer)
+
+
 def show_print_preview(parent, html):
     # type: (Any, str) -> None
     doc = _Gui.QTextDocument()
     doc.setHtml(html)
-    printer = _Print.QPrinter(_Print.QPrinter.HighResolution)
+    printer = _Print.QPrinter(_printer_mode())
+    # Configure paper/orientation BEFORE the dialog is built, so its
+    # initial page geometry already reflects A4 portrait.
+    _setup_a4_portrait(printer)
     preview = _Print.QPrintPreviewDialog(printer, parent)
-    printer.setPaperSize(_Print.QPrinter.A4)
-    printer.setPageOrientation(_Core.Qt.Portrait)
 
     def render_preview(p):
         # type: (_Print.QPrinter) -> None
-        doc.print_(p)
+        _doc_print(doc, p)
 
     preview.paintRequested.connect(render_preview)
     preview.setWindowModality(_Core.Qt.ApplicationModal)
-    preview.resize(1000, 800)
+    preview.resize(_preview_size(parent))
     preview.exec_()
+
+
+def _preview_size(parent):
+    # type: (Any) -> Any
+    """A generous but screen-aware preview window: ~85% of the display the
+    parent (or the primary screen) is on."""
+    screen = None
+    try:
+        if parent is not None:
+            win = parent.window()
+            if win is not None:
+                screen = _Widgets.QApplication.screenAt(
+                    win.frameGeometry().center())
+        if screen is None:
+            screen = _Widgets.QApplication.primaryScreen()
+        avail = screen.availableGeometry()
+        return _Core.QSize(min(1240, int(avail.width() * 0.85)),
+                           min(860, int(avail.height() * 0.85)))
+    except Exception:
+        return _Core.QSize(1100, 800)
 
 
 def print_html_direct(parent, html):
     # type: (Any, str) -> None
     doc = _Gui.QTextDocument()
     doc.setHtml(html)
-    printer = _Print.QPrinter(_Print.QPrinter.HighResolution)
-    printer.setPaperSize(_Print.QPrinter.A4)
+    printer = _Print.QPrinter(_printer_mode())
+    _setup_a4_portrait(printer)
     dlg = _Print.QPrintDialog(printer, parent)
     if dlg.exec_() == _Widgets.QDialog.Accepted:
-        doc.print_(printer)
+        _doc_print(doc, printer)
 
 
 def build_report_html(title, sections):

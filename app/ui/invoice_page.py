@@ -233,6 +233,10 @@ class ItemRow(_W.QWidget):
         self.qty = F.QtyEdit()
         self.qty.setPlaceholderText("تعداد")
         self.qty.setFixedWidth(80)
+        # Default تعداد = ۱ for new rows (web parity): picking a product
+        # immediately shows the row total without typing a quantity.
+        # (Edit mode overwrites this with the stored quantity.)
+        self.qty.set_value(1)
         self.unit = F.MoneyEdit()
         self.unit.setPlaceholderText("فی (تومان)")
         self.unit.setMinimumWidth(120)
@@ -678,7 +682,14 @@ class InvoicePage(_W.QWidget):
             error_msg(self, "خطا در ذخیره فاکتور: %s" % exc)
             return
         self._reset_state()
-        info_msg(self, "فاکتور با موفقیت ذخیره شد.")
+        # After a successful save jump straight to the A4 print preview —
+        # the dialog has its own print button, so printing stays optional.
+        try:
+            printing.show_invoice_preview(self, inv_id)
+        except Exception as exc:  # never lose the "saved" confirmation
+            error_msg(self, "فاکتور ذخیره شد اما پیش‌نمایش چاپ باز نشد: %s" % exc)
+        else:
+            info_msg(self, "فاکتور با موفقیت ذخیره شد.")
         self.window_.goto("archive")
         return inv_id
 

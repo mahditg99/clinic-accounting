@@ -125,6 +125,11 @@ CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_patient ON invoices(patient_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_doctor ON invoices(doctor_id);
+/* Archive list is `is_deleted = 0 ORDER BY invoice_no DESC LIMIT/OFFSET` —
+   this index lets SQLite walk (is_deleted, invoice_no) in reverse instead of
+   scanning + sorting every invoice on each page load / keystroke. */
+CREATE INDEX IF NOT EXISTS idx_invoices_active_no ON invoices(is_deleted, invoice_no);
+CREATE INDEX IF NOT EXISTS idx_invoices_issued ON invoices(issued_at);
 """
 
 

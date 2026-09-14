@@ -100,7 +100,7 @@ function itemRow(it) {
   div.innerHTML =
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
       '<div class="prod-pick" style="flex:3;min-width:180px;position:relative;"></div>' +
-      '<input type="text" data-fanum data-qty value="' + (it ? A.faDigits(it.quantity) : "") + '" style="flex:1;min-width:70px;" placeholder="تعداد">' +
+      '<input type="text" data-fanum data-qty value="' + (it ? A.faDigits(it.quantity) : A.faDigits(1)) + '" style="flex:1;min-width:70px;" placeholder="تعداد">' +
       '<input type="text" data-unit data-money value="' + (defaultUnit ? A.fmtMoney(defaultUnit) : "") + '" style="flex:1;min-width:110px;" placeholder="فی (تومان)">' +
       '<input type="text" data-rowtotal value="" readonly style="flex:1;min-width:110px;background:var(--surface-2);" placeholder="جمع ردیف">' +
       '<button class="btn ghost sm" type="button" onclick="this.closest(\'.item-row\').remove();recalc();refreshAddButtons();">حذف</button>' +
@@ -259,9 +259,14 @@ async function saveInvoice() {
     allow_overpay: document.getElementById("allowOverpay").value === "1",
   };
   try {
-    await A.postJSON("/api/invoices", body);
+    const res = await A.postJSON("/api/invoices", body);
     A.toast("فاکتور ذخیره شد.", "success");
-    setTimeout(() => location.href = "/invoices?msg=فاکتور با موفقیت ثبت شد", 400);
+    /* After saving go straight to the invoice page, which auto-opens the
+       print preview (print=1) — printing itself stays the user's choice. */
+    const target = (res && res.id)
+      ? "/invoice/" + res.id + "?saved=1&print=1"
+      : "/invoices?msg=فاکتور با موفقیت ثبت شد";
+    setTimeout(() => location.href = target, 400);
   } catch (err) {
     if (err.status === 409) {
       if (!A.confirmAsk(err.message.replace("برای تایید دوباره ذخیره کنید.", "") + " ─ آیا ادامه می‌دهید؟")) return;

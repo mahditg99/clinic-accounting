@@ -174,18 +174,77 @@ def file_no_exists(file_no, exclude_id=None):
 # Products
 # --------------------------------------------------------------------------- #
 
-def list_products(active_only=False):
-    # type: (bool) -> List[Dict[str, Any]]
+PRODUCT_SORT_EXPRS = {
+    "title": "title",
+    "purchase": "purchase_price",
+    "sale": "sale_price",
+    "stock": "stock",
+    "low": "low_stock_warning",
+    "active": "is_active",
+}
+
+
+def _products_where(active_only, search_text):
+    # type: (bool, str) -> Tuple[str, List[Any]]
+    conds = []
+    params = []
+    if active_only:
+        conds.append("is_active = 1")
+    if search_text:
+        folded = _search_word(search_text.strip())
+        if folded:
+            conds.append("(title LIKE ? OR description LIKE ?)")
+            params.extend(["%" + folded + "%"] * 2)
+    where = ("WHERE " + " AND ".join(conds) + " ") if conds else ""
+    return where, params
+
+
+def _products_order(sort_key, sort_desc):
+    # type: (Optional[str], bool) -> str
+    expr = PRODUCT_SORT_EXPRS.get(sort_key) if sort_key else None
+    if expr is None:
+        return "ORDER BY sort_order, title"
+    return "ORDER BY %s %s, id DESC" % (expr, "DESC" if sort_desc else "ASC")
+
+
+def list_products(active_only=False, search_text="", limit=None, offset=0,
+                  sort_key=None, sort_desc=False):
+    # type: (bool, str, Optional[int], int, Optional[str], bool) -> List[Dict[str, Any]]
+    """One SQL page of products; limit=None keeps the old full fetch
+    (invoice pickers etc. rely on it)."""
+    where, params = _products_where(active_only, search_text)
     conn = _conn()
     try:
         sql = ("SELECT id, title, price, purchase_price, sale_price, stock, "
                "low_stock_warning, description, sort_order, is_active "
-               "FROM products ")
-        if active_only:
-            sql += "WHERE is_active = 1 "
-        sql += "ORDER BY sort_order, title"
-        rows = conn.execute(sql).fetchall()
+               "FROM products " + where + _products_order(sort_key, sort_desc))
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params = params + [max(int(limit), 0), max(int(offset), 0)]
+        rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_products(active_only=False, search_text=""):
+    # type: (bool, str) -> int
+    where, params = _products_where(active_only, search_text)
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM products " + where, params)
+        return int(cur.fetchone()[0])
+    finally:
+        conn.close()
+
+
+def get_product(product_id):
+    # type: (int) -> Optional[Dict[str, Any]]
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM products WHERE id = ?",
+                           (product_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -605,23 +664,36 @@ def restore_stock_for_invoice(invoice_id, conn=None):
 # Invoice archive queries
 # --------------------------------------------------------------------------- #
 
-def list_archive_invoices(doctor_filter=None, date_from=None, date_to=None,
-                          search_text=""):
-    # type: (Optional[int], Optional[str], Optional[str], str) -> List[Dict[str, Any]]
-    """doctor_filter=None -> all; 'none' -> بدون معرف; int id -> that doctor.
+# Symbolic sort keys -> SQL expressions. ORDER BY accepts only these names
+# (whitelisted), so user data can never reach the statement.
+ARCHIVE_SORT_EXPRS = {
+    "invoice_no": "i.invoice_no",
+    "file_no": "p.file_no",
+    "patient": "(p.last_name || ' ' || p.first_name)",
+    "issued_at": "i.issued_at",
+    "total": "i.total_amount",
+    "paid": "paid_sum",
+    "remaining": ("(CAST(i.total_amount AS INTEGER) - (SELECT "
+                  "COALESCE(SUM(pm.amount),0) FROM payments pm "
+                  "WHERE pm.invoice_id = i.id))"),
+    "doctor": "d.name",
+}
 
-    date_from/date_to are Gregorian ISO 'YYYY-MM-DD' (inclusive).
-    """
-    sql = (
-        "SELECT i.id, i.invoice_no, i.issued_at, i.total_amount, "
-        "p.file_no, p.first_name, p.last_name, "
-        "d.id AS doctor_id, d.name AS doctor_name, "
-        "(SELECT COALESCE(SUM(pm.amount),0) FROM payments pm "
-        " WHERE pm.invoice_id = i.id) AS paid_sum "
-        "FROM invoices i "
-        "JOIN patients p ON p.id = i.patient_id "
-        "LEFT JOIN doctors d ON d.id = i.doctor_id "
-        "WHERE i.is_deleted = 0 ")
+
+def _archive_order_by(sort_key, sort_desc):
+    # type: (Optional[str], bool) -> str
+    expr = ARCHIVE_SORT_EXPRS.get(sort_key) if sort_key else None
+    if expr is None:
+        return "ORDER BY i.invoice_no DESC"
+    # Stable tiebreak keeps page boundaries consistent.
+    return "ORDER BY %s %s, i.id DESC" % (expr, "DESC" if sort_desc else "ASC")
+
+
+def _archive_where(doctor_filter, date_from, date_to, search_text):
+    # type: (Any, Optional[str], Optional[str], str) -> Tuple[str, List[Any]]
+    """Shared WHERE builder for the archive list + count queries so a page
+    and its total always agree on the same filter."""
+    sql = "WHERE i.is_deleted = 0 "
     params = []
     if doctor_filter == "none":
         sql += "AND i.doctor_id IS NULL "
@@ -643,7 +715,58 @@ def list_archive_invoices(doctor_filter=None, date_from=None, date_to=None,
             sql += ("AND (p.first_name LIKE ? OR p.last_name LIKE ? "
                     "OR p.file_no LIKE ? OR CAST(i.invoice_no AS TEXT) LIKE ?) ")
             params.extend([like, like, like, like])
-    sql += "ORDER BY i.invoice_no DESC"
+    return sql, params
+
+
+def _archive_joins():
+    # type: () -> str
+    return ("FROM invoices i "
+            "JOIN patients p ON p.id = i.patient_id "
+            "LEFT JOIN doctors d ON d.id = i.doctor_id ")
+
+
+def count_archive_invoices(doctor_filter=None, date_from=None, date_to=None,
+                           search_text=""):
+    # type: (Any, Optional[str], Optional[str], str) -> int
+    """Total rows matching the archive filter (drives the page counter)."""
+    where, params = _archive_where(doctor_filter, date_from, date_to,
+                                   search_text)
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT COUNT(*) " + _archive_joins() + where,
+                           params)
+        return int(cur.fetchone()[0])
+    finally:
+        conn.close()
+
+
+def list_archive_invoices(doctor_filter=None, date_from=None, date_to=None,
+                          search_text="", limit=None, offset=0,
+                          sort_key=None, sort_desc=False):
+    # type: (Any, Optional[str], Optional[str], str, Optional[int], int, Optional[str], bool) -> List[Dict[str, Any]]
+    """doctor_filter=None -> all; 'none' -> بدون معرف; int id -> that doctor.
+
+    date_from/date_to are Gregorian ISO 'YYYY-MM-DD' (inclusive).
+    ``limit``/``offset`` page the result *at the SQL level* — a 500+ invoice
+    archive then materializes one page of rows instead of the whole table
+    (the old unbounded fetch was the main source of slowness).
+    ``sort_key`` (a name from ARCHIVE_SORT_EXPRS) sorts the *whole* filtered
+    set server-side, so a header click orders every invoice, not just the
+    visible page.
+    """
+    where, params = _archive_where(doctor_filter, date_from, date_to,
+                                   search_text)
+    sql = (
+        "SELECT i.id, i.invoice_no, i.issued_at, i.total_amount, "
+        "p.file_no, p.first_name, p.last_name, "
+        "d.id AS doctor_id, d.name AS doctor_name, "
+        "(SELECT COALESCE(SUM(pm.amount),0) FROM payments pm "
+        " WHERE pm.invoice_id = i.id) AS paid_sum "
+        + _archive_joins() + where
+        + _archive_order_by(sort_key, sort_desc))
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = params + [max(int(limit), 0), max(int(offset), 0)]
     conn = _conn()
     try:
         rows = conn.execute(sql, params).fetchall()

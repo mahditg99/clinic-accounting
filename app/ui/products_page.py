@@ -13,6 +13,18 @@ _Core = Qt.QtCore
 _Gui = Qt.QtGui
 _W = Qt.QtWidgets
 
+PAGE_SIZE = 50
+
+# Header column -> SQL sort key (whole-dataset sort, then re-page).
+_SORT_KEYS = {
+    0: "title",
+    1: "purchase",
+    2: "sale",
+    3: "stock",
+    4: "low",
+    5: "active",
+}
+
 
 class ProductsPage(_W.QWidget):
     def __init__(self, window):
@@ -21,6 +33,11 @@ class ProductsPage(_W.QWidget):
         self.setLayoutDirection(_Core.Qt.RightToLeft)
         self._editing_id = None  # type: Optional[int]
         self._all = []  # type: List[Dict[str, Any]]
+        self._page = 0
+        self._sort_key = None  # type: Optional[str]
+        self._sort_desc = False
+        self._sort_col = -1  # type: int
+        self._sort_order = _Core.Qt.AscendingOrder
 
         outer = _W.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -84,26 +101,68 @@ class ProductsPage(_W.QWidget):
         v.setSpacing(8)
         head = _W.QHBoxLayout()
         head.addWidget(F.card_title("فهرست محصولات"))
+        head.addSpacing(10)
+        # Live search over name + description (SQL LIKE), like the archive.
+        self.search = F.SearchEdit(placeholder="جستجوی محصول…")
+        self.search.setMinimumWidth(220)
+        self.search.textChanged.connect(self._on_filter_changed)
+        head.addWidget(self.search)
         head.addStretch(1)
         self.show_inactive = _W.QCheckBox("نمایش غیرفعال / بدون موجودی")
-        self.show_inactive.toggled.connect(lambda _: self.refresh())
+        self.show_inactive.toggled.connect(lambda _: self._on_filter_changed())
         head.addWidget(self.show_inactive)
         v.addLayout(head)
         self.table = F.make_table(
             ["نام محصول", "قیمت خرید", "قیمت فروش", "موجودی", "سطح هشدار",
              "وضعیت", "عملیات"],
             widths=[265, 115, 125, 95, 125, 95, 260])
+        self.table.set_external_sort(self._on_header_sort)
         self.table.setMinimumHeight(340)
         v.addWidget(self.table)
+        self.pager = F.PagerRow()
+        self.pager.page_requested.connect(self._on_page)
+        v.addWidget(self.pager)
         self.count_lbl = _W.QLabel("")
         self.count_lbl.setStyleSheet("color:#5d7385; font-size:11px;")
         v.addWidget(self.count_lbl)
         return card(box)
 
+    def _on_filter_changed(self):
+        self._page = 0
+        self.refresh()
+
+    def _on_page(self, p):
+        self._page = p
+        self.refresh()
+
+    def _on_header_sort(self, col, order):
+        key = _SORT_KEYS.get(col)
+        if key is None:
+            F.set_sort_state(self.table, self._sort_col, self._sort_order)
+            return
+        self._sort_col = col
+        self._sort_order = order
+        self._sort_key = key
+        self._sort_desc = (order == _Core.Qt.DescendingOrder)
+        self._page = 0
+        self.refresh()
+
     # ------------------------------------------------------------------ #
     def refresh(self):
         active_only = not self.show_inactive.isChecked()
-        self._all = models.list_products(active_only=active_only)
+        search_text = self.search.text().strip()
+        total = models.count_products(active_only=active_only,
+                                      search_text=search_text)
+        pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self._page = min(max(0, self._page), pages - 1)
+        self._all = models.list_products(
+            active_only=active_only, search_text=search_text,
+            limit=PAGE_SIZE, offset=self._page * PAGE_SIZE,
+            sort_key=self._sort_key, sort_desc=self._sort_desc)
+        self._total = total
+        first = self._page * PAGE_SIZE + 1 if total else 0
+        last = min(total, (self._page + 1) * PAGE_SIZE)
+        self.pager.set_state(self._page, pages, first, last, total)
         self._render()
 
     def _render(self):
@@ -179,7 +238,7 @@ class ProductsPage(_W.QWidget):
             h.addStretch(1)
             self.table.setIndexWidget(model.index(r, 6), btns)
         F.resort(self.table)
-        self.count_lbl.setText("%s محصول" % F.fa(len(self._all)))
+        self.count_lbl.setText("مجموعاً %s محصول" % F.fa(self._total))
 
     def _cell(self, text):
         return F.make_item(text)

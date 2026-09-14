@@ -2,10 +2,10 @@
 """Archive page — mirrors webapp/templates/archive.html."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..utils import Qt, confirm_msg, info_msg
-from .. import models, settings as settings_mod, date_utils, money_utils
+from .. import models, date_utils, money_utils
 from . import fields as F
 from . import printing
 from ..theme import card, primary
@@ -14,12 +14,35 @@ _Core = Qt.QtCore
 _Gui = Qt.QtGui
 _W = Qt.QtWidgets
 
+# The archive is paged at the SQL level: with 500+ invoices, loading (and
+# rendering) one page instead of the whole table is what keeps the page
+# opening instantly and search-as-you-type responsive.
+PAGE_SIZE = 50
+
+# Header column -> SQL sort key. Sorting runs in the database over the
+# WHOLE filtered set, then re-paginates — not just the visible page.
+_SORT_KEYS = {
+    0: "invoice_no",
+    1: "file_no",
+    2: "patient",
+    3: "issued_at",
+    4: "total",
+    5: "paid",
+    6: "remaining",
+    7: "doctor",
+}
+
 
 class ArchivePage(_W.QWidget):
     def __init__(self, window):
         super().__init__(window)
         self.window_ = window
         self.setLayoutDirection(_Core.Qt.RightToLeft)
+        self._page = 0  # 0-based page index into the filtered archive
+        self._sort_key = None  # type: Optional[str]
+        self._sort_desc = False
+        self._sort_col = -1  # type: int  # last header col the user sorted on
+        self._sort_order = _Core.Qt.AscendingOrder
 
         outer = _W.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -56,13 +79,19 @@ class ArchivePage(_W.QWidget):
         self.search.setMinimumWidth(220)
         grid.addWidget(self.search, 1, 3)
         btn = primary(_W.QPushButton("اعمال فیلتر"), 110)
-        btn.clicked.connect(self._reload)
+        btn.clicked.connect(self._on_filter_changed)
         grid.addWidget(btn, 1, 4)
-        self.search.textChanged.connect(lambda _: self._reload())
-        self.doctor_combo.currentIndexChanged.connect(lambda _: self._reload())
-        self.date_from.dateChanged.connect(lambda _: self._reload())
-        self.date_to.dateChanged.connect(lambda _: self._reload())
+        self.search.textChanged.connect(lambda _: self._on_filter_changed())
+        self.doctor_combo.currentIndexChanged.connect(
+            lambda _: self._on_filter_changed())
+        self.date_from.dateChanged.connect(lambda _: self._on_filter_changed())
+        self.date_to.dateChanged.connect(lambda _: self._on_filter_changed())
         return card(box)
+
+    def _on_filter_changed(self):
+        # Any filter change restarts browsing from the first page.
+        self._page = 0
+        self._reload()
 
     def _build_table_card(self):
         box = _W.QWidget()
@@ -78,9 +107,34 @@ class ArchivePage(_W.QWidget):
         # Lazy action widgets: only visible rows get real buttons, so a
         # 600-invoice archive opens in a blink instead of building 1800.
         self.table.set_row_widget_factory(8, self._make_actions)
+        # Header clicks sort the WHOLE filtered dataset in SQL, then page.
+        self.table.set_external_sort(self._on_header_sort)
         self.table.setMinimumHeight(360)
         v.addWidget(self.table)
+        # Direct-jump pager: « ‹ [صفحه ▾] از N › » + range label.
+        self.pager = F.PagerRow()
+        self.pager.page_requested.connect(self._on_page)
+        v.addWidget(self.pager)
         return card(box)
+
+    def _on_page(self, p):
+        self._page = p
+        self._reload()
+
+    def _on_header_sort(self, col, order):
+        key = _SORT_KEYS.get(col)
+        if key is None:
+            # «عملیات» (or any unmapped column): put the arrow back on the
+            # sort actually in effect — the header must not advertise a
+            # sort the SQL never ran.
+            F.set_sort_state(self.table, self._sort_col, self._sort_order)
+            return
+        self._sort_col = col
+        self._sort_order = order
+        self._sort_key = key
+        self._sort_desc = (order == _Core.Qt.DescendingOrder)
+        self._page = 0
+        self._reload()
 
     # ------------------------------------------------------------------ #
     def refresh(self):
@@ -106,13 +160,29 @@ class ArchivePage(_W.QWidget):
         doctor_filter = "all" if raw is None else raw
         if doctor_filter == "all":
             doctor_filter = None
+        date_from = self.date_from.iso() or None
+        date_to = self.date_to.iso() or None
+        search_text = self.search.text().strip()
+        total = models.count_archive_invoices(
+            doctor_filter=doctor_filter, date_from=date_from,
+            date_to=date_to, search_text=search_text)
+        pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+        if self._page >= pages:
+            self._page = pages - 1
+        if self._page < 0:
+            self._page = 0
         rows = models.list_archive_invoices(
             doctor_filter=doctor_filter,
-            date_from=self.date_from.iso() or None,
-            date_to=self.date_to.iso() or None,
-            search_text=self.search.text().strip())
+            date_from=date_from,
+            date_to=date_to,
+            search_text=search_text,
+            limit=PAGE_SIZE, offset=self._page * PAGE_SIZE,
+            sort_key=self._sort_key, sort_desc=self._sort_desc)
         self._rows = rows
-        self.title_lbl.setText("فاکتورها (%s مورد)" % F.fa(len(rows)))
+        self.title_lbl.setText("فاکتورها (%s مورد)" % F.fa(total))
+        first = self._page * PAGE_SIZE + 1 if total else 0
+        last = min(total, (self._page + 1) * PAGE_SIZE)
+        self.pager.set_state(self._page, pages, first, last, total)
         model = self.table.model()
         model.removeRows(0, model.rowCount())
         for r in rows:
@@ -181,29 +251,8 @@ class ArchivePage(_W.QWidget):
 
     # ------------------------------------------------------------------ #
     def _show(self, invoice_id):
-        inv = models.get_invoice(invoice_id)
-        if inv is None:
-            return
-        items = models.list_invoice_items(invoice_id)
-        paid = models.invoice_paid_sum(invoice_id)
-        html = printing.build_invoice_html({
-            "app_title": settings_mod.get_setting("app_title", "آذران طب"),
-            "invoice_no": inv["invoice_no"],
-            "issued_at": inv["issued_at"],
-            "patient_name": "%s %s" % (inv["first_name"], inv["last_name"]),
-            "file_no": inv["file_no"],
-            "doctor_name": inv.get("doctor_name") or "",
-            "show_doctor": settings_mod.get_setting("show_doctor_in_print",
-                                                    "0") == "1",
-            "notes": inv.get("notes") or "",
-            "rows": [{"title": it["title"], "unit_price": it["unit_price"],
-                      "quantity": it["quantity"], "row_total": it["row_total"]}
-                     for it in items],
-            "total": int(inv["total_amount"]),
-            "paid": paid,
-            "remaining": int(inv["total_amount"]) - paid,
-        })
-        printing.show_print_preview(self, html)
+        # Single shared builder with the post-save preview (printing.py).
+        printing.show_invoice_preview(self, invoice_id)
 
     def _void(self, invoice_id):
         if not confirm_msg(self, "ابطال فاکتور، موجودی کالاها را برمی‌گرداند. "
