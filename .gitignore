@@ -10,7 +10,7 @@ env/
 build/
 dist/
 *.manifest
-
+venv**/
 # ---- Local data, backups and secrets ----
 *.db
 *.db-journal

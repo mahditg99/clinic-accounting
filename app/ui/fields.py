@@ -115,6 +115,116 @@ class SearchEdit(FaLineEdit):
         self.setClearButtonEnabled(True)
 
 
+# --------------------------------------------------------------------------- #
+# Combo boxes: capped popups everywhere, search for big lists
+# --------------------------------------------------------------------------- #
+
+# A combo popup must never sprawl over half the screen — beyond this many
+# rows the popup scrolls (and searchable combos filter instead).
+COMBO_MAX_VISIBLE = 10
+
+
+def style_combo(combo, max_visible=COMBO_MAX_VISIBLE):
+    # type: (Any, int) -> Any
+    """Cap a plain combo's dropdown height (scroll instead of flood)."""
+    combo.setMaxVisibleItems(max_visible)
+    try:
+        combo.view().setVerticalScrollBarPolicy(_Core.Qt.ScrollBarAsNeeded)
+    except Exception:
+        pass
+    return combo
+
+
+class SearchComboBox(_W.QComboBox):
+    """Drop-in QComboBox with a CAPPED dropdown and TYPE-TO-SEARCH.
+
+    Keeps the whole QComboBox API (addItem(text, payload) / currentData /
+    findData / addItems / clear / ...), so pages swap ``_W.QComboBox()`` for
+    ``F.SearchComboBox()`` unchanged. Typing filters the dropdown to every
+    item *containing* the text (the completer, same pattern proven in
+    PatientPicker), and the popup is capped at ``max_visible`` rows so a
+    300-product list no longer covers half the screen.
+    """
+
+    def __init__(self, parent=None, placeholder="", max_visible=COMBO_MAX_VISIBLE):
+        super().__init__(parent)
+        self.setLayoutDirection(_Core.Qt.RightToLeft)
+        self.setMaxVisibleItems(max_visible)
+        try:
+            self.view().setVerticalScrollBarPolicy(_Core.Qt.ScrollBarAsNeeded)
+        except Exception:
+            pass
+        self.setEditable(True)
+        self.setInsertPolicy(_W.QComboBox.NoInsert)
+        self._comp = _W.QCompleter(self)
+        self._comp.setFilterMode(_Core.Qt.MatchContains)
+        self._comp.setCaseSensitivity(_Core.Qt.CaseInsensitive)
+        self._comp.setMaxVisibleItems(max_visible)
+        try:
+            self._comp.setCompletionMode(_W.QCompleter.PopupCompletion)
+            # Completion on column 0 — the item text — so Persian titles
+            # match by substring anywhere, not just as a prefix.
+            self._comp.setCompletionColumn(0)
+            self._comp.setModel(self.model())
+        except Exception:
+            pass
+        self.setCompleter(self._comp)
+        self._comp.activated[str].connect(self._on_completion)
+        if placeholder:
+            self.lineEdit().setPlaceholderText(placeholder)
+        # Revert garbage text to the last valid selection on focus-out, so
+        # currentData() can never drift from what is displayed.
+        self.lineEdit().editingFinished.connect(self._settle)
+        self._settling = False
+
+    def _on_completion(self, text):
+        idx = self.findText(text, _Core.Qt.MatchExactly)
+        if idx >= 0:
+            self.setCurrentIndex(idx)
+
+    def _settle(self):
+        if self._settling:
+            return
+        self._settling = True
+        try:
+            text = self.lineEdit().text()
+            idx = self.findText(text, _Core.Qt.MatchExactly)
+            if idx < 0 and text.strip():
+                # Non-matching leftover: if exactly one item *contains* the
+                # text, select it; otherwise roll back to the last pick.
+                folded = en(text).lower()
+                hits = [i for i in range(self.count())
+                        if folded in en(self.itemText(i)).lower()]
+                if len(hits) == 1:
+                    idx = hits[0]
+                else:
+                    idx = max(self.currentIndex(), 0)
+            if idx < 0:
+                idx = 0
+            self.setCurrentIndex(idx)
+            if idx < self.count():
+                self.lineEdit().setText(self.itemText(idx))
+            self.lineEdit().deselect()
+        finally:
+            self._settling = False
+
+    def add(self, text, payload=None):
+        # type: (str, Any) -> None
+        """addItem + payload in one call (None payload keeps QVariant() as
+        the QComboBox overload would)."""
+        if payload is None:
+            self.addItem(text)
+        else:
+            self.addItem(text, _Core.QVariant(payload))
+
+    def current_payload(self):
+        # type: () -> Any
+        raw = self.currentData()
+        if isinstance(raw, _Core.QVariant):
+            raw = raw.toVariant()
+        return raw
+
+
 class MoneyEdit(_W.QLineEdit):
     """Money input: Persian digits + ٬ separators, integer Toman value out."""
 
@@ -834,6 +944,12 @@ class PagerRow(_W.QWidget):
         self.last_btn.clicked.connect(lambda: self._jump(self._pages - 1))
         self.combo = _W.QComboBox()
         self.combo.setMinimumWidth(86)
+        self.combo.setMaxVisibleItems(12)
+        try:
+            self.combo.view().setVerticalScrollBarPolicy(
+                _Core.Qt.ScrollBarAsNeeded)
+        except Exception:
+            pass
         self.combo.currentIndexChanged.connect(self._on_combo)
         of_lbl = _W.QLabel("از")
         of_lbl.setStyleSheet("color:#5d7385; font-size:11px;")
@@ -895,6 +1011,121 @@ class PagerRow(_W.QWidget):
         else:
             self.info.setText("نمایش %s تا %s از %s" % (
                 fa(first), fa(last), fa(total)))
+
+
+class ListPager:
+    """Client-side pagination + whole-set column sort for a make_table()
+    view fed from an in-memory list (pages that already hold every row:
+    patients, doctors, expenses, per-product reports).
+
+    Wire-up on a page::
+
+        self.pager = ListPager(self.table)
+        self.pager.configure(
+            filter_fn=lambda p: match_words(query, ...),   # or None
+            key_fn=_sort_key,                              # (item, col) -> comparable
+            sortable=(0, 1, 2, ...),                       # header cols that sort
+            on_render=self._append_row)                    # one row into the model
+        self.pager.set_items(rows, reset_page=True)
+
+    Header clicks sort the FULL filtered list (then re-slice), so the sort
+    never "lies" by only ordering the visible page. vlayout() adds the
+    PagerRow strip below the table.
+    """
+
+    PAGE_SIZE = 50
+
+    def __init__(self, view, size=None):
+        self.view = view
+        self.size = size or self.PAGE_SIZE
+        self.page = 0
+        self.items = []
+        self.filter_fn = None
+        self.key_fn = None
+        self.sortable = None  # None = every column
+        self.on_render = None
+        self.sort_col = None
+        self.sort_desc = False
+        self.pager = PagerRow()
+        self.pager.page_requested.connect(self._goto)
+        view.set_external_sort(self._on_sort)
+
+    def configure(self, filter_fn=None, key_fn=None, on_render=None,
+                  sortable=None):
+        if filter_fn is not None:
+            self.filter_fn = filter_fn
+        if key_fn is not None:
+            self.key_fn = key_fn
+        if on_render is not None:
+            self.on_render = on_render
+        if sortable is not None:
+            self.sortable = set(sortable)
+        return self
+
+    def set_query(self, fn):
+        """Swap the live filter (search box) and restart at page 1."""
+        self.filter_fn = fn
+        self.page = 0
+        return self.render()
+
+    def set_items(self, items, reset_page=True):
+        self.items = list(items)
+        if reset_page:
+            self.page = 0
+        return self.render()
+
+    def visible_items(self):
+        return self._filtered_sorted()
+
+    def _filtered_sorted(self):
+        out = self.items
+        if self.filter_fn is not None:
+            out = [x for x in out if self.filter_fn(x)]
+        if self.sort_col is not None and self.key_fn is not None:
+            try:
+                out = sorted(out,
+                             key=lambda x: self.key_fn(x, self.sort_col),
+                             reverse=self.sort_desc)
+            except Exception:
+                pass
+        return out
+
+    def render(self):
+        vis = self._filtered_sorted()
+        pages = max(1, (len(vis) + self.size - 1) // self.size)
+        self.page = min(max(0, self.page), pages - 1)
+        start = self.page * self.size
+        chunk = vis[start:start + self.size]
+        model = self.view.model()
+        model.removeRows(0, model.rowCount())
+        for it in chunk:
+            if self.on_render is not None:
+                self.on_render(it)
+        # External sort is set (we own it): resort only re-syncs the header
+        # indicator; the rows already arrive sorted.
+        resort(self.view)
+        self.view.schedule_fit()
+        first = start + 1 if chunk else 0
+        last = min(len(vis), start + len(chunk))
+        self.pager.set_state(self.page, pages, first, last, len(vis))
+        return len(vis)
+
+    def _goto(self, p):
+        self.page = p
+        self.render()
+
+    def _on_sort(self, col, order):
+        if col is None or col < 0 or (self.sortable is not None
+                                      and col not in self.sortable):
+            set_sort_state(self.view,
+                           self.sort_col if self.sort_col is not None else -1,
+                           _Core.Qt.DescendingOrder if self.sort_desc
+                           else _Core.Qt.AscendingOrder)
+            return
+        self.sort_col = col
+        self.sort_desc = (order == _Core.Qt.DescendingOrder)
+        self.page = 0
+        self.render()
 
 
 def row_of(view, row):

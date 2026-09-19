@@ -61,7 +61,7 @@ class ArchivePage(_W.QWidget):
         grid = _W.QGridLayout(box)
         grid.setSpacing(8)
         grid.addWidget(_W.QLabel("پزشک"), 0, 0)
-        self.doctor_combo = _W.QComboBox()
+        self.doctor_combo = F.SearchComboBox(placeholder="جستجوی پزشک…")
         self.doctor_combo.setMinimumWidth(150)
         grid.addWidget(self.doctor_combo, 1, 0)
         grid.addWidget(_W.QLabel("از تاریخ"), 0, 1)

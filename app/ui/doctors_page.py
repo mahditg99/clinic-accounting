@@ -21,6 +21,7 @@ class DoctorsPage(_W.QWidget):
         self.setLayoutDirection(_Core.Qt.RightToLeft)
         self._editing_id = None  # type: Optional[int]
         self._all = []  # type: List[Dict[str, Any]]
+        self._total = 0
 
         outer = _W.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -83,7 +84,6 @@ class DoctorsPage(_W.QWidget):
         head.addStretch(1)
         self.filter_edit = F.SearchEdit(placeholder="جستجو در نام، تخصص، تلفن…")
         self.filter_edit.setFixedWidth(260)
-        self.filter_edit.textChanged.connect(lambda _: self._render())
         head.addWidget(self.filter_edit)
         v.addLayout(head)
         self.table = F.make_table(
@@ -91,77 +91,112 @@ class DoctorsPage(_W.QWidget):
             widths=[130, 140, 155, 180, 150, 95, 210], stretch=3)
         self.table.setMinimumHeight(300)
         v.addWidget(self.table)
+        self.pager = F.ListPager(self.table)
+        self.pager.configure(
+            key_fn=self._sort_key, sortable=(0, 1, 2, 3, 4, 5),
+            on_render=self._append_row)
+        v.addWidget(self.pager.pager)
         self.count_lbl = _W.QLabel("")
         self.count_lbl.setStyleSheet("color:#5d7385; font-size:11px;")
         v.addWidget(self.count_lbl)
+        self.filter_edit.textChanged.connect(self._apply_filter)
         return card(box)
+
+    @staticmethod
+    def _display_name(d):
+        return (d.get("first_name") or d["name"])
+
+    @staticmethod
+    def _display_last(d):
+        return (d.get("last_name") or "")
+
+    @staticmethod
+    def _sort_key(d, col):
+        if col in (0, 1):
+            f = DoctorsPage._display_name(d) if col == 0 \
+                else DoctorsPage._display_last(d)
+            return F.en(f or "").lower()
+        if col == 2:
+            return F.en(d.get("specialty") or "").lower()
+        if col == 3:
+            return F.en(d.get("address") or "").lower()
+        if col == 4:
+            return int("".join(c for c in F.en(d.get("phone") or "")
+                               if c.isdigit()))
+        if col == 5:
+            return int(d["is_active"])
+        return 0
+
+    def _apply_filter(self, _text=None):
+        q = self.filter_edit.text()
+        self.pager.set_query(
+            lambda d: F.match_words(
+                q, self._display_name(d), self._display_last(d),
+                d.get("specialty") or "", d.get("address") or "",
+                d.get("phone") or ""))
+        self._update_count()
 
     # ------------------------------------------------------------------ #
     def refresh(self):
         self._all = settings_mod.list_doctors(active_only=False)
-        self._render()
+        self._total = len(self._all)
+        self.pager.set_items(self._all, reset_page=False)
+        self._update_count()
 
-    def _render(self):
-        q = self.filter_edit.text()
+    def _append_row(self, d):
         model = self.table.model()
-        model.removeRows(0, model.rowCount())
-        shown = 0
+        first = self._display_name(d)
+        last = self._display_last(d)
+        active = bool(d["is_active"])
+        status = "فعال" if active else "غیرفعال"
+        items = [self._cell(F.fa(first)), self._cell(F.fa(last)),
+                 self._cell(d.get("specialty") or "—"),
+                 self._cell(d.get("address") or "—"),
+                 self._cell(F.fa(d.get("phone") or "—")),
+                 self._cell(status), self._cell("")]
+        items[5].setForeground(_Gui.QColor("#2e8b6a" if active else "#5d7385"))
+        model.appendRow(items)
+        r = model.rowCount() - 1
+        btns = _W.QWidget()
+        h = _W.QHBoxLayout(btns)
+        h.setContentsMargins(2, 0, 2, 0)
+        h.setSpacing(4)
         no_doc = settings_mod.get_no_doctor_id()
-        for d in self._all:
-            first = d.get("first_name") or d["name"]
-            last = d.get("last_name") or ""
-            cells = [first, last, d.get("specialty") or "",
-                     d.get("address") or "", d.get("phone") or ""]
-            if not F.match_words(q, *cells):
-                continue
-            shown += 1
-            active = bool(d["is_active"])
-            status = "فعال" if active else "غیرفعال"
-            items = [self._cell(F.fa(first)), self._cell(F.fa(last)),
-                     self._cell(d.get("specialty") or "—"),
-                     self._cell(d.get("address") or "—"),
-                     self._cell(F.fa(d.get("phone") or "—")),
-                     self._cell(status), self._cell("")]
-            items[5].setForeground(_Gui.QColor("#2e8b6a" if active else "#5d7385"))
-            model.appendRow(items)
-            r = model.rowCount() - 1
-            btns = _W.QWidget()
-            h = _W.QHBoxLayout(btns)
-            h.setContentsMargins(2, 0, 2, 0)
-            h.setSpacing(4)
-            if d["id"] == no_doc or settings_mod.is_no_doctor(d["name"]):
-                lbl = _W.QLabel("پیش‌فرض")
-                lbl.setStyleSheet("color:#5d7385; font-weight:700;")
-                h.addWidget(lbl)
-            else:
-                b_edit = _W.QPushButton("ویرایش")
-                b_edit.setProperty("variant", "link")
-                b_edit.setProperty("btnsize", "xs")
-                b_edit.setCursor(_Core.Qt.PointingHandCursor)
-                b_edit.clicked.connect(lambda _=False, dd=d: self._load_for_edit(dd))
-                h.addWidget(b_edit, 0, _Core.Qt.AlignVCenter)
-                if active:
-                    b_deact = _W.QPushButton("غیرفعال")
-                    b_deact.setProperty("variant", "link")
-                    b_deact.setProperty("btnsize", "xs")
-                    b_deact.setProperty("tone", "warn")
-                    b_deact.setCursor(_Core.Qt.PointingHandCursor)
-                    b_deact.clicked.connect(
-                        lambda _=False, pid=d["id"]: self._deactivate(pid))
-                    h.addWidget(b_deact, 0, _Core.Qt.AlignVCenter)
-                b_del = _W.QPushButton("حذف")
-                b_del.setProperty("variant", "link")
-                b_del.setProperty("btnsize", "xs")
-                b_del.setProperty("tone", "danger")
-                b_del.setCursor(_Core.Qt.PointingHandCursor)
-                b_del.clicked.connect(lambda _=False, pid=d["id"]: self._delete(pid))
-                h.addWidget(b_del, 0, _Core.Qt.AlignVCenter)
-            h.addStretch(1)
-            self.table.setIndexWidget(model.index(r, 6), btns)
-        F.resort(self.table)
+        if d["id"] == no_doc or settings_mod.is_no_doctor(d["name"]):
+            lbl = _W.QLabel("پیش‌فرض")
+            lbl.setStyleSheet("color:#5d7385; font-weight:700;")
+            h.addWidget(lbl)
+        else:
+            b_edit = _W.QPushButton("ویرایش")
+            b_edit.setProperty("variant", "link")
+            b_edit.setProperty("btnsize", "xs")
+            b_edit.setCursor(_Core.Qt.PointingHandCursor)
+            b_edit.clicked.connect(lambda _=False, dd=d: self._load_for_edit(dd))
+            h.addWidget(b_edit, 0, _Core.Qt.AlignVCenter)
+            if active:
+                b_deact = _W.QPushButton("غیرفعال")
+                b_deact.setProperty("variant", "link")
+                b_deact.setProperty("btnsize", "xs")
+                b_deact.setProperty("tone", "warn")
+                b_deact.setCursor(_Core.Qt.PointingHandCursor)
+                b_deact.clicked.connect(
+                    lambda _=False, pid=d["id"]: self._deactivate(pid))
+                h.addWidget(b_deact, 0, _Core.Qt.AlignVCenter)
+            b_del = _W.QPushButton("حذف")
+            b_del.setProperty("variant", "link")
+            b_del.setProperty("btnsize", "xs")
+            b_del.setProperty("tone", "danger")
+            b_del.setCursor(_Core.Qt.PointingHandCursor)
+            b_del.clicked.connect(lambda _=False, pid=d["id"]: self._delete(pid))
+            h.addWidget(b_del, 0, _Core.Qt.AlignVCenter)
+        h.addStretch(1)
+        self.table.setIndexWidget(model.index(r, 6), btns)
+
+    def _update_count(self):
+        shown = len(self.pager.visible_items())
         self.count_lbl.setText("نمایش %s پزشک از %s" % (
-            F.fa(shown), F.fa(len(self._all))))
-        if shown == 0 and q:
+            F.fa(shown), F.fa(self._total)))
+        if shown == 0 and self.filter_edit.text().strip():
             self.count_lbl.setText("موردی با این جستجو یافت نشد.")
 
     def _cell(self, text):

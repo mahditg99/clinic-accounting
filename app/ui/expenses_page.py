@@ -34,6 +34,7 @@ class ExpensesPage(_W.QWidget):
         g.addWidget(_W.QLabel("دسته"), 0, 1)
         self.new_cat = _W.QComboBox()
         self.new_cat.setMinimumWidth(130)
+        F.style_combo(self.new_cat)
         g.addWidget(self.new_cat, 1, 1)
         g.addWidget(_W.QLabel("مبلغ (تومان)"), 0, 2)
         self.new_amount = F.MoneyEdit()
@@ -62,6 +63,7 @@ class ExpensesPage(_W.QWidget):
         fh.addWidget(_W.QLabel("دسته"))
         self.cat_filter = _W.QComboBox()
         self.cat_filter.setMinimumWidth(120)
+        F.style_combo(self.cat_filter)
         fh.addWidget(self.cat_filter)
         flt_btn = primary(_W.QPushButton("فیلتر"), 100)
         flt_btn.clicked.connect(self._reload)
@@ -79,6 +81,13 @@ class ExpensesPage(_W.QWidget):
         tv.setSpacing(8)
         self.title_lbl = F.card_title("فهرست هزینه‌ها")
         tv.addWidget(self.title_lbl)
+        hhead = _W.QHBoxLayout()
+        hhead.addStretch(1)
+        self.search = F.SearchEdit(placeholder="جستجو در دسته یا توضیحات…")
+        self.search.setFixedWidth(240)
+        self.search.textChanged.connect(lambda _: self._apply_filter())
+        hhead.addWidget(self.search)
+        tv.addLayout(hhead)
         self.table = F.make_table(
             ["تاریخ", "دسته", "مبلغ", "توضیحات", "عملیات"],
             widths=[122, 132, 122, 300, 90], stretch=3)
@@ -86,6 +95,11 @@ class ExpensesPage(_W.QWidget):
         self.table.set_row_widget_factory(4, self._make_actions)
         self.table.setMinimumHeight(360)
         tv.addWidget(self.table)
+        self.pager = F.ListPager(self.table)
+        self.pager.configure(
+            key_fn=self._sort_key, sortable=(0, 1, 2, 3),
+            on_render=self._append_row)
+        tv.addWidget(self.pager.pager)
         v.addWidget(card(t_box))
         v.addStretch(1)
 
@@ -93,6 +107,41 @@ class ExpensesPage(_W.QWidget):
     def refresh(self):
         self._fill_categories()
         self._reload()
+
+    @staticmethod
+    def _sort_key(r, col):
+        if col == 0:
+            return r["expense_date"] or ""  # ISO sorts chronologically
+        if col == 1:
+            return F.en(r["category"] or "").lower()
+        if col == 2:
+            return int(r["amount"])
+        if col == 3:
+            return F.en(r["description"] or "").lower()
+        return 0
+
+    def _apply_filter(self):
+        q = self.search.text().strip()
+        self.pager.set_query(
+            lambda r: F.match_words(q, r["category"],
+                                    r["description"] or ""))
+        self._update_title()
+
+    def _append_row(self, r):
+        model = self.table.model()
+        items = [
+            self._cell(date_utils.iso_to_jalali_persian_str(
+                r["expense_date"]), payload=r["id"]),
+            self._cell(r["category"]),
+            self._cell(money_utils.format_money_persian(r["amount"])),
+            self._cell(r["description"] or ""),
+            self._cell(""),
+        ]
+        model.appendRow(items)
+
+    def _update_title(self):
+        shown = len(self.pager.visible_items())
+        self.title_lbl.setText("فهرست هزینه‌ها (%s مورد)" % F.fa(shown))
 
     def _fill_categories(self):
         cats = settings_mod.get_expense_categories()
@@ -128,21 +177,10 @@ class ExpensesPage(_W.QWidget):
             self.date_from.iso() or None,
             self.date_to.iso() or None,
             category)
-        self.title_lbl.setText("فهرست هزینه‌ها (%s مورد)" % F.fa(len(rows)))
-        model = self.table.model()
-        model.removeRows(0, model.rowCount())
-        for r in rows:
-            items = [
-                self._cell(date_utils.iso_to_jalali_persian_str(
-                    r["expense_date"]), payload=r["id"]),
-                self._cell(r["category"]),
-                self._cell(money_utils.format_money_persian(r["amount"])),
-                self._cell(r["description"] or ""),
-                self._cell(""),
-            ]
-            model.appendRow(items)
-        F.resort(self.table)
-        self.table.schedule_fit()
+        # SQL applies the date/category filter; the pager slices + search
+        # over the result and re-sorts the whole set on header clicks.
+        self.pager.set_items(rows, reset_page=True)
+        self._update_title()
 
     def _cell(self, text, payload=None):
         return F.make_item(text, payload=payload)

@@ -24,6 +24,7 @@ class PatientsPage(_W.QWidget):
         self.setLayoutDirection(_Core.Qt.RightToLeft)
         self._editing_id = None  # type: Optional[int]
         self._all = []  # type: List[Dict[str, Any]]
+        self._total = 0
 
         outer = _W.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -54,6 +55,7 @@ class PatientsPage(_W.QWidget):
         self.last.setLayoutDirection(_Core.Qt.RightToLeft)
         self.gender = _W.QComboBox()
         self.gender.addItems(["—", "آقا", "خانم"])
+        F.style_combo(self.gender)
         self.phone = F.FaLineEdit()
         self.phone.setMaxLength(15)
         self.address = _W.QLineEdit()
@@ -95,7 +97,6 @@ class PatientsPage(_W.QWidget):
         head.addStretch(1)
         self.filter_edit = F.SearchEdit(placeholder="جستجو در شماره یا نام…")
         self.filter_edit.setFixedWidth(260)
-        self.filter_edit.textChanged.connect(lambda _: self._render())
         head.addWidget(self.filter_edit)
         v.addLayout(head)
 
@@ -107,48 +108,79 @@ class PatientsPage(_W.QWidget):
         self.table.set_row_widget_factory(7, self._make_actions)
         self.table.setMinimumHeight(320)
         v.addWidget(self.table)
+        # Client-side paging + whole-list column sort.
+        self.pager = F.ListPager(self.table)
+        self.pager.configure(
+            key_fn=self._sort_key, sortable=(0, 1, 2, 3, 4, 5),
+            on_render=self._append_row)
+        v.addWidget(self.pager.pager)
         self.count_lbl = _W.QLabel("")
         self.count_lbl.setStyleSheet("color:#5d7385; font-size:11px;")
         v.addWidget(self.count_lbl)
+        self.filter_edit.textChanged.connect(self._apply_filter)
         return card(box)
+
+    # Column -> comparable for whole-list sort (Persian digits folded).
+    @staticmethod
+    def _sort_key(p, col):
+        if col == 0:
+            return int("".join(c for c in F.en(str(p["file_no"]))
+                               if c.isdigit()) or 0)
+        if col == 1:
+            return F.en(p["first_name"] or "").lower()
+        if col == 2:
+            return F.en(p["last_name"] or "").lower()
+        if col == 3:
+            return int("".join(c for c in F.en(p["phone"] or "") if c.isdigit()))
+        if col == 4:
+            return _GENDER_TO_FA.get(p["gender"], "")
+        if col == 5:
+            return int(p["invoice_count"])
+        return 0
+
+    def _apply_filter(self, _text=None):
+        q = self.filter_edit.text()
+        self.pager.set_query(
+            lambda p: F.match_words(q, p["file_no"], p["first_name"],
+                                    p["last_name"], p["phone"] or "",
+                                    _GENDER_TO_FA.get(p["gender"], ""),
+                                    str(p["invoice_count"])))
+        self._update_count()
 
     # ------------------------------------------------------------------ #
     # Data
     # ------------------------------------------------------------------ #
     def refresh(self):
         self._all = models.list_patients()
-        self._render()
+        self._total = len(self._all)
+        # Keep the current page across re-visits; typing search (reset_page)
+        # is handled by _apply_filter only.
+        self.pager.set_items(self._all, reset_page=False)
+        self._update_count()
 
-    def _render(self):
-        q = self.filter_edit.text()
+    def _append_row(self, p):
         model = self.table.model()
-        model.removeRows(0, model.rowCount())
-        shown = 0
-        for p in self._all:
-            cells = [p["file_no"], p["first_name"], p["last_name"],
-                     p["phone"] or "", _GENDER_TO_FA.get(p["gender"], ""),
-                     str(p["invoice_count"])]
-            if not F.match_words(q, *cells):
-                continue
-            shown += 1
-            active = bool(p["is_active"])
-            items = [self._cell(F.fa(p["file_no"]), payload=p),
-                     self._cell(p["first_name"]),
-                     self._cell(p["last_name"]),
-                     self._cell(F.fa(p["phone"] or "")),
-                     self._cell(_GENDER_TO_FA.get(p["gender"], "")),
-                     self._cell(F.fa(p["invoice_count"]))]
-            status = self._cell("فعال" if active else "غیرفعال")
-            status.setForeground(_Gui.QColor("#2e8b6a" if active else "#5d7385"))
-            items.append(status)
-            op = self._cell("")
-            items.append(op)
-            model.appendRow(items)
-        F.resort(self.table)
-        self.table.schedule_fit()
+        active = bool(p["is_active"])
+        items = [self._cell(F.fa(p["file_no"]), payload=p),
+                 self._cell(p["first_name"]),
+                 self._cell(p["last_name"]),
+                 self._cell(F.fa(p["phone"] or "")),
+                 self._cell(_GENDER_TO_FA.get(p["gender"], "")),
+                 self._cell(F.fa(p["invoice_count"]))]
+        status = self._cell("فعال" if active else "غیرفعال")
+        status.setForeground(_Gui.QColor("#2e8b6a" if active else "#5d7385"))
+        items.append(status)
+        items.append(self._cell(""))
+        model.appendRow(items)
+
+    def _shown_total(self):
+        return len(self.pager.visible_items())
+
+    def _update_count(self):
+        shown = self._shown_total()
         self.count_lbl.setText("نمایش %s پرونده از %s" % (
-            F.fa(shown), F.fa(len(self._all))))
-        if shown == 0 and q:
+            F.fa(shown), F.fa(self._total)))
+        if shown == 0 and self.filter_edit.text().strip():
             self.count_lbl.setText("موردی با این جستجو یافت نشد.")
 
     def _cell(self, text, payload=None):

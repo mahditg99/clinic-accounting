@@ -35,7 +35,7 @@ class DoctorReportPage(_W.QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(8)
         h.addWidget(_W.QLabel("پزشک"))
-        self.doctor_combo = _W.QComboBox()
+        self.doctor_combo = F.SearchComboBox(placeholder="جستجوی پزشک…")
         self.doctor_combo.setMinimumWidth(160)
         h.addWidget(self.doctor_combo)
         h.addWidget(_W.QLabel("از تاریخ"))
@@ -86,9 +86,40 @@ class DoctorReportPage(_W.QWidget):
             widths=[85, 150, 110, 105, 105, 115], stretch=1)
         self.invoices_table.setMinimumHeight(300)
         iv.addWidget(self.invoices_table)
+        self._inv_pager = F.ListPager(self.invoices_table)
+        self._inv_pager.configure(
+            key_fn=self._inv_sort_key, sortable=(0, 1, 2, 3, 4, 5),
+            on_render=self._append_inv_row)
+        iv.addWidget(self._inv_pager.pager)
         self.inv_card = card(inv_box)
         v.addWidget(self.inv_card)
         v.addStretch(1)
+
+    @staticmethod
+    def _inv_sort_key(r, col):
+        if col == 0:
+            return int(r["invoice_no"])
+        if col == 1:
+            return F.en(r["patient_name"] or "").lower()
+        if col == 2:
+            return r["issued_at"] or ""  # ISO is chronological
+        if col == 3:
+            return int(r["total_amount"])
+        if col == 4:
+            return int(r["total_received"])
+        if col == 5:
+            return int(r["remaining"])
+        return 0
+
+    def _append_inv_row(self, r):
+        self.invoices_table.model().appendRow([
+            F.make_item(r["invoice_no"]),
+            F.make_item(r["patient_name"]),
+            F.make_item(date_utils.iso_to_jalali_persian_str(r["issued_at"])),
+            F.make_item(money_utils.format_money_persian(r["total_amount"])),
+            F.make_item(money_utils.format_money_persian(r["total_received"])),
+            F.make_item(money_utils.format_money_persian(r["remaining"])),
+        ])
 
     # ------------------------------------------------------------------ #
     def refresh(self):
@@ -138,13 +169,8 @@ class DoctorReportPage(_W.QWidget):
                                        rep["total_cost"],
                                        rep["total_profit"])):
                 lab.setText(money_utils.format_money_persian(num))
-            F.set_rows(self.invoices_table,
-                       [[r["invoice_no"], r["patient_name"],
-                         date_utils.iso_to_jalali_persian_str(r["issued_at"]),
-                         money_utils.format_money_persian(r["total_amount"]),
-                         money_utils.format_money_persian(r["total_received"]),
-                         money_utils.format_money_persian(r["remaining"])]
-                        for r in rep["invoices_summary"]])
+            self._inv_pager.set_items(rep["invoices_summary"],
+                                      reset_page=True)
 
     def _show_referral(self, rep):
         self.tiles.setVisible(False)

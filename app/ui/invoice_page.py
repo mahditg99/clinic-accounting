@@ -219,17 +219,26 @@ class ItemRow(_W.QWidget):
         outer.setSpacing(2)
         h = _W.QHBoxLayout()
         h.setSpacing(6)
-        self.prod_btn = _W.QPushButton("انتخاب کالا …")
-        self.prod_btn.setMinimumWidth(190)
-        self.menu = _W.QMenu(self.prod_btn)
+        # Searchable product combo (was a one-action-per-product QMenu that
+        # swallowed half the screen once the catalog grew): the dropdown is
+        # capped and typing filters it by substring (F.SearchComboBox).
+        self.prod = F.SearchComboBox(placeholder="انتخاب کالا …")
+        self.prod.setMinimumWidth(200)
+        self._by_id = {}
+        self.prod.addItem("")  # index 0: nothing chosen yet
         for p in self.products:
-            label = "%s  |  قیمت %s  |  موجودی %s" % (
-                p["title"], money_utils.format_money_persian(p["sale_price"]),
+            title = p["title"] or "کالای بدون نام"
+            self._by_id[int(p["id"])] = p
+            tip = "%s  |  قیمت %s  |  موجودی %s" % (
+                title, money_utils.format_money_persian(p["sale_price"]),
                 F.fa(p["stock"]))
-            act = self.menu.addAction(label)
-            act.setData(_Core.QVariant(p["id"]))
-            act.triggered.connect(lambda _=False, pp=p: self.set_product(pp))
-        self.prod_btn.setMenu(self.menu)  # click opens the product menu
+            self.prod.addItem(title, _Core.QVariant(int(p["id"])))
+            self.prod.setItemData(self.prod.count() - 1, _Core.QVariant(tip),
+                                  _Core.Qt.ToolTipRole)
+        self.prod.activated.connect(self._on_pick)
+        # Also sync on programmatic/typed selection (Enter after typing an
+        # exact title lands via currentIndexChanged, not activated).
+        self.prod.currentIndexChanged.connect(self._sync_product)
         self.qty = F.QtyEdit()
         self.qty.setPlaceholderText("تعداد")
         self.qty.setFixedWidth(80)
@@ -250,7 +259,7 @@ class ItemRow(_W.QWidget):
         self.del_btn.setProperty("variant", "link")
         self.del_btn.setProperty("tone", "danger")
         self.del_btn.clicked.connect(self.removed.emit)
-        h.addWidget(self.prod_btn)
+        h.addWidget(self.prod)
         h.addWidget(self.qty)
         h.addWidget(self.unit)
         h.addWidget(self.total)
@@ -262,12 +271,40 @@ class ItemRow(_W.QWidget):
         self.qty.textChanged.connect(self._recompute)
         self.unit.textChanged.connect(self._recompute)
 
-    def set_product(self, p):
+    def _on_pick(self, index):
+        """User chose from the (possibly filtered) dropdown."""
+        self._sync_product()
+
+    def _sync_product(self, _idx=None):
+        """Mirror the combo's current payload into product/price/stock.
+        Triggered by popup clicks AND by typed-exact + Enter."""
+        raw = self.prod.currentData()
+        if isinstance(raw, _Core.QVariant):
+            raw = raw.toVariant()
+        p = None
+        if raw is not None:
+            try:
+                p = self._by_id.get(int(raw))
+            except Exception:
+                p = None
         self.product = p
-        self.prod_btn.setText(p["title"] or "کالای بدون نام")
-        self.unit.set_value(int(p["sale_price"] or 0))
-        self.stock_lbl.setText("موجودی: %s" % F.fa(p["stock"]))
+        if p is None:
+            self.unit.set_value(None)
+            self.stock_lbl.setText("")
+        else:
+            self.unit.set_value(int(p["sale_price"] or 0))
+            self.stock_lbl.setText("موجودی: %s" % F.fa(p["stock"]))
         self._recompute()
+
+    def set_product(self, p):
+        idx = self.prod.findData(_Core.QVariant(int(p["id"])))
+        if idx >= 0:
+            self.prod.setCurrentIndex(idx)  # -> _sync_product via signal
+        else:
+            self.product = p
+            self.unit.set_value(int(p["sale_price"] or 0))
+            self.stock_lbl.setText("موجودی: %s" % F.fa(p["stock"]))
+            self._recompute()
 
     def _recompute(self):
         q, u = self.qty.value(), self.unit.value()
@@ -306,6 +343,7 @@ class PaymentRow(_W.QWidget):
         self.method = _W.QComboBox()
         self.method.addItems(list(methods))
         self.method.setMinimumWidth(130)
+        F.style_combo(self.method)
         self.amount = F.MoneyEdit()
         self.amount.setPlaceholderText("مبلغ")
         self.del_btn = _W.QPushButton("حذف")
@@ -373,7 +411,7 @@ class InvoicePage(_W.QWidget):
             lambda _t: self._update_patient_status())
 
         v.addWidget(_W.QLabel("پزشک معالج"))
-        self.doctor = _W.QComboBox()
+        self.doctor = F.SearchComboBox(placeholder="جستجوی پزشک…")
         v.addWidget(self.doctor)
 
         v.addWidget(_W.QLabel("تاریخ صدور (شمسی)"))
@@ -528,9 +566,7 @@ class InvoicePage(_W.QWidget):
                         prod = p
                         break
             if prod is not None:
-                row.product = prod
-                row.prod_btn.setText(prod["title"] or "کالای بدون نام")
-                row.stock_lbl.setText("موجودی: %s" % F.fa(prod["stock"]))
+                row.set_product(prod)  # syncs combo + price + stock
             row.custom_title = preset.get("title") or ""
             row.qty.setText(F.fa(preset["quantity"]))
             row.unit.set_value(int(preset["unit_price"] or 0))
@@ -731,7 +767,9 @@ class InvoicePage(_W.QWidget):
                 if self.doctor.currentData() is not None else "",
                 "show_doctor": chk.isChecked(),
                 "notes": self.notes.toPlainText().strip(),
-                "rows": items, "total": total, "paid": paid})
+                "rows": items, "total": total, "paid": paid,
+                "payments": [{"method": p["method"], "amount": p["amount"]}
+                             for p in payments if p["amount"] > 0]})
 
         def render():
             view.setHtml(html())

@@ -68,8 +68,38 @@ class ProductSalesPage(_W.QWidget):
             widths=[180, 80, 115, 145, 110], stretch=0)
         self.table.setMinimumHeight(360)
         tv.addWidget(self.table)
+        # Paged view of the per-product rows (header sorts the whole set).
+        self.pager = F.ListPager(self.table)
+        self.pager.configure(
+            key_fn=self._sort_key, sortable=(0, 1, 2, 3, 4),
+            on_render=self._append_row)
+        tv.addWidget(self.pager.pager)
         v.addWidget(card(t_box))
         v.addStretch(1)
+
+    @staticmethod
+    def _sort_key(r, col):
+        if col == 0:
+            return F.en(r["title"] or "").lower()
+        if col == 1:
+            return int(r["quantity"])
+        if col == 2:
+            return int(r["row_total"])
+        if col == 3:
+            return int(r["row_cost"])
+        if col == 4:
+            return int(r["profit"])
+        return 0
+
+    def _append_row(self, r):
+        model = self.table.model()
+        model.appendRow([
+            F.make_item(r["title"]),
+            F.make_item(r["quantity"]),
+            F.make_item(money_utils.format_money_persian(r["row_total"])),
+            F.make_item(money_utils.format_money_persian(r["row_cost"])),
+            F.make_item(money_utils.format_money_persian(r["profit"])),
+        ])
 
     # ------------------------------------------------------------------ #
     def refresh(self):
@@ -80,12 +110,7 @@ class ProductSalesPage(_W.QWidget):
         dt = self.date_to.iso() or None
         rep = models.product_sales_report(df, dt)
         self._rep = rep
-        F.set_rows(self.table,
-                   [[r["title"], r["quantity"],
-                     money_utils.format_money_persian(r["row_total"]),
-                     money_utils.format_money_persian(r["row_cost"]),
-                     money_utils.format_money_persian(r["profit"])]
-                    for r in rep["rows"]])
+        self.pager.set_items(rep["rows"], reset_page=True)
         self.title_lbl.setText("فروش به تفکیک محصول (%s ردیف)" %
                                F.fa(len(rep["rows"])))
         vals = [w for w in self.tiles.findChildren(_W.QLabel)

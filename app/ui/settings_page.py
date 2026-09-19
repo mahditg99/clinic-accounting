@@ -114,6 +114,7 @@ class SettingsPage(_W.QWidget):
         grid.addWidget(_W.QLabel("اندازه چاپ"), 0, 2)
         self.size_combo = _W.QComboBox()
         self.size_combo.addItems(["A4", "A5"])
+        F.style_combo(self.size_combo)
         grid.addWidget(self.size_combo, 0, 3)
         gv.addLayout(grid)
         self.chk_update_date = _W.QCheckBox(
