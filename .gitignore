@@ -34,3 +34,7 @@ _tmp*/
 Thumbs.db
 Desktop.ini
 *.rar
+
+# ---- One-file build (AzaranTeb_onefile.spec) ----
+build_onefile/
+dist_onefile/
