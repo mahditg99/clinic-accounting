@@ -284,6 +284,25 @@ def iso_to_jalali_persian_str(value):
     return to_persian_digits(iso_to_jalali_str(value))
 
 
+PERSIAN_MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+
+# datetime.date.weekday(): Monday == 0.
+_PERSIAN_WEEKDAYS = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه",
+                     "شنبه", "یکشنبه"]
+
+
+def iso_to_jalali_long_persian_str(value):
+    # type: (Optional[str]) -> str
+    """'چهارشنبه، ۱۵ مهر ۱۴۰۵' for an ISO date; '' when unparseable."""
+    d = parse_iso_date(value)
+    if d is None:
+        return ""
+    jy, jm, jd = gregorian_to_jalali(d.year, d.month, d.day)
+    return to_persian_digits("%s، %d %s %d" % (
+        _PERSIAN_WEEKDAYS[d.weekday()], jd, PERSIAN_MONTHS[jm - 1], jy))
+
+
 def jalali_str_to_iso(jalali_str):
     # type: (str) -> Optional[str]
     if not jalali_str:

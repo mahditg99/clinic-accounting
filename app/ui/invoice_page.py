@@ -315,6 +315,10 @@ class ItemRow(_W.QWidget):
     def is_valid(self):
         return self.qty.value() > 0 and self.unit.value() > 0
 
+    def is_blank(self):
+        """No product picked and no price typed — an empty spare row."""
+        return self.product is None and self.unit.value() <= 0
+
     def data(self):
         # type: () -> Optional[Dict[str, Any]]
         if not self.is_valid():
@@ -337,6 +341,9 @@ class PaymentRow(_W.QWidget):
 
     def __init__(self, methods, parent=None):
         super().__init__(parent)
+        # Original paid_at of a payment loaded for edit: re-saving the
+        # invoice must not move the money to the day of the edit.
+        self.paid_at = None  # type: Optional[str]
         h = _W.QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
@@ -369,6 +376,12 @@ class InvoicePage(_W.QWidget):
         self._invoice_no = ""
         self._item_rows = []  # type: List[ItemRow]
         self._pay_rows = []  # type: List[PaymentRow]
+        # While editing: products of this invoice that are no longer active
+        # (a sold-out batch is auto-deactivated) and its doctor if that
+        # doctor was deactivated — both must stay selectable, or the edit
+        # silently unlinks them.
+        self._edit_products = []  # type: List[Dict[str, Any]]
+        self._edit_doctor = None  # type: Optional[Dict[str, Any]]
 
         outer = _W.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -489,10 +502,16 @@ class InvoicePage(_W.QWidget):
         cur = self.doctor.currentData()
         self.doctor.clear()
         self.doctor.addItem("بدون معرف", _Core.QVariant(None))
+        ids = set()
         for d in models.list_doctors_with_id():
             if d["name"] == "بدون معرف":
                 continue
+            ids.add(d["id"])
             self.doctor.addItem(F.fa(d["name"]), _Core.QVariant(d["id"]))
+        ed = self._edit_doctor
+        if ed is not None and ed["id"] not in ids:
+            self.doctor.addItem(F.fa(ed["name"]) + " (غیرفعال)",
+                                _Core.QVariant(ed["id"]))
         if cur is not None:
             idx = self.doctor.findData(_Core.QVariant(cur))
             if idx >= 0:
@@ -500,6 +519,10 @@ class InvoicePage(_W.QWidget):
 
     def _reset_state(self, keep_doctor=False):
         self._invoice_id = None
+        self._edit_products = []
+        if self._edit_doctor is not None:
+            self._edit_doctor = None
+            self._reload_doctors()
         self._invoice_no = str(models.next_invoice_no_stub())
         self.sub_lbl.setText("شماره فاکتور: " + F.fa(self._invoice_no))
         self.window_.set_page_title("فاکتور جدید",
@@ -531,16 +554,33 @@ class InvoicePage(_W.QWidget):
         self.window_.set_page_title("ویرایش فاکتور",
                                     "شماره فاکتور: " + F.fa(self._invoice_no))
         self.picker.set_patient(models.get_patient(inv["patient_id"]))
+        self._edit_doctor = None
+        if inv["doctor_id"] is not None and inv.get("doctor_name"):
+            self._edit_doctor = {"id": inv["doctor_id"],
+                                 "name": inv["doctor_name"]}
+        items = models.list_invoice_items(invoice_id)
+        active = set(p["id"] for p in models.list_products(active_only=True))
+        self._edit_products = []
+        for pid in sorted(set(it["product_id"] for it in items
+                              if it.get("product_id") is not None)):
+            if pid not in active:
+                prod = models.get_product(pid)
+                if prod is not None:
+                    self._edit_products.append(prod)
         self._reload_doctors()
         idx = self.doctor.findData(_Core.QVariant(inv["doctor_id"]))
         self.doctor.setCurrentIndex(max(idx, 0))
         self.date.set_iso((inv["issued_at"] or "")[:10])
         self.update_issued.show()
+        # «به‌روزرسانی تاریخ صدور هنگام ویرایش» in the settings page sets
+        # the default of this box.
+        self.update_issued.setChecked(settings_mod.get_setting(
+            "update_invoice_date_on_edit", "0") == "1")
         self.notes.setPlainText(inv["notes"] or "")
         for r in list(self._item_rows):
             r.deleteLater()
         self._item_rows = []
-        for it in models.list_invoice_items(invoice_id):
+        for it in items:
             self._add_item_row(it)
         for r in list(self._pay_rows):
             r.deleteLater()
@@ -554,7 +594,9 @@ class InvoicePage(_W.QWidget):
     # Rows
     # ------------------------------------------------------------------ #
     def _products(self):
-        return models.list_products(active_only=True)
+        prods = models.list_products(active_only=True)
+        have = set(p["id"] for p in prods)
+        return prods + [p for p in self._edit_products if p["id"] not in have]
 
     def _add_item_row(self, preset):
         row = ItemRow(self._products())
@@ -585,6 +627,7 @@ class InvoicePage(_W.QWidget):
             if idx >= 0:
                 row.method.setCurrentIndex(idx)
             row.amount.set_value(int(preset["amount"]))
+            row.paid_at = preset.get("paid_at") or None
         row.changed.connect(self._recalc)
         row.removed.connect(lambda r=row: self._drop_row(self._pay_rows,
                                                          self.pay_lay, r))
@@ -658,6 +701,13 @@ class InvoicePage(_W.QWidget):
             not self._pay_rows or self._pay_rows[-1].value() > 0)
 
     # ------------------------------------------------------------------ #
+    def _incomplete_rows(self):
+        # type: () -> List[int]
+        """1-based numbers of item rows that were started but are not valid
+        (they used to vanish from the saved invoice without a word)."""
+        return [n for n, r in enumerate(self._item_rows, 1)
+                if not r.is_blank() and not r.is_valid()]
+
     def _collect(self):
         items = []
         for r in self._item_rows:
@@ -669,7 +719,7 @@ class InvoicePage(_W.QWidget):
             if r.value() > 0:
                 payments.append({"method": r.method.currentText(),
                                  "amount": r.value(),
-                                 "paid_at": date_utils.now_iso()})
+                                 "paid_at": r.paid_at or date_utils.now_iso()})
         return items, payments
 
     def _save(self):
@@ -688,6 +738,11 @@ class InvoicePage(_W.QWidget):
                                   "نشد. اگر بیمار جدید است، ابتدا از صفحهٔ "
                                   "«پرونده‌ها» ثبتش کنید.")
             self._update_patient_status()
+            return
+        bad = self._incomplete_rows()
+        if bad:
+            warning_msg(self, "ردیف %s اقلام تعداد یا مبلغ ندارد. آن را کامل "
+                              "یا حذف کنید." % "، ".join(F.fa(n) for n in bad))
             return
         items, payments = self._collect()
         if not items:
@@ -735,6 +790,11 @@ class InvoicePage(_W.QWidget):
             warning_msg(self, "ابتدا بیمار را از فهرست پیشنهادی انتخاب کنید.")
             self._update_patient_status()
             return
+        bad = self._incomplete_rows()
+        if bad:
+            warning_msg(self, "ردیف %s اقلام تعداد یا مبلغ ندارد. آن را کامل "
+                              "یا حذف کنید." % "، ".join(F.fa(n) for n in bad))
+            return
         items, payments = self._collect()
         if not items:
             warning_msg(self, "ابتدا حداقل یک کالا اضافه کنید.")
@@ -744,43 +804,39 @@ class InvoicePage(_W.QWidget):
         dlg.resize(760, 620)
         dlg.setLayoutDirection(_Core.Qt.RightToLeft)
         v = _W.QVBoxLayout(dlg)
-        chk = _W.QCheckBox("درج نام پزشک معالج در فاکتور")
-        chk.setChecked(settings_mod.get_setting("show_doctor_in_print",
-                                                "0") == "1")
-        v.addWidget(chk)
         view = _W.QTextEdit()
         view.setReadOnly(True)
         v.addWidget(view, 1)
 
-        def html():
-            total = sum(i["row_total"] for i in items)
-            paid = sum(p["amount"] for p in payments)
-            p = self.picker.patient
-            return printing.build_proforma_html({
-                "app_title": settings_mod.get_setting("app_title", "آذران طب"),
-                "invoice_no": self._invoice_no,
-                "issued_jalali": date_utils.iso_to_jalali_persian_str(
-                    self.date.iso() or date_utils.today_iso()),
-                "patient_name": "%s %s" % (p["first_name"], p["last_name"]),
-                "file_no": p["file_no"],
-                "doctor_name": self.doctor.currentText()
-                if self.doctor.currentData() is not None else "",
-                "show_doctor": chk.isChecked(),
-                "notes": self.notes.toPlainText().strip(),
-                "rows": items, "total": total, "paid": paid,
-                "payments": [{"method": p["method"], "amount": p["amount"]}
-                             for p in payments if p["amount"] > 0]})
-
-        def render():
-            view.setHtml(html())
-
-        chk.toggled.connect(lambda _: render())
-        render()
+        # Doctor's name on the sheet follows «نمایش نام پزشک در چاپ» in the
+        # settings page — nothing is asked here.
+        show_doctor = settings_mod.get_setting("show_doctor_in_print",
+                                               "0") == "1"
+        total = sum(i["row_total"] for i in items)
+        paid = sum(p["amount"] for p in payments)
+        pat = self.picker.patient
+        data = {
+            "invoice_no": self._invoice_no,
+            "issued_iso": self.date.iso() or date_utils.today_iso(),
+            "patient_name": "%s %s" % (pat["first_name"], pat["last_name"]),
+            "file_no": pat["file_no"],
+            "doctor_name": self.doctor.currentText()
+            if self.doctor.currentData() is not None else "",
+            "show_doctor": show_doctor,
+            "notes": self.notes.toPlainText().strip(),
+            "rows": items, "total": total, "paid": paid}
+        # The in-dialog view is a plain text preview (no paper, no watermark),
+        # so it uses the A5 text size; printing uses the paper's own size.
+        preview_html = printing.build_proforma_html(data, zoom=1.0)
+        printing.attach_resources(view.document())  # letterhead image
+        view.setHtml(preview_html)
         row = _W.QHBoxLayout()
         b_print = primary(_W.QPushButton("چاپ"), 110)
         b_close = _W.QPushButton("بستن")
         b_print.clicked.connect(
-            lambda: printing.show_print_preview(dlg, html()))
+            lambda: printing.show_print_preview(
+                dlg, printing.build_proforma_html(data),
+                page=printing.invoice_page_opts()))
         b_close.clicked.connect(dlg.accept)
         row.addWidget(b_print)
         row.addWidget(b_close)

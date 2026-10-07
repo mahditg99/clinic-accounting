@@ -14,7 +14,7 @@ from . import date_utils
 DB_NAME = "azaran_teb.db"
 BACKUP_DIR = "backups"
 BACKUP_PREFIX = "clinic_backup_"
-MAX_BACKUPS = 5
+MAX_BACKUPS = 20  # newest kept; older clinic_backup_*.db files are pruned
 
 
 def _base_dir():
@@ -165,13 +165,69 @@ def init_db():
             else:
                 # Nothing migrated; the snapshot was identical to live DB.
                 _remove_file(backup_path)
-        if _is_empty(conn):
-            pass
-            # _seed(conn)
         _ensure_required_settings(conn)
         conn.commit()
     finally:
         conn.close()
+    _daily_backup()
+
+
+def migrate_db():
+    # type: () -> None
+    """Bring the live DB to the current schema without taking a backup —
+    used right after a backup is restored (an older backup may predate
+    columns the UI reads)."""
+    conn = get_connection()
+    try:
+        conn.executescript(_SCHEMA)
+        conn.commit()
+        _migrate(conn)
+        _ensure_invoice_no_floor(conn)
+        _ensure_required_settings(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def validate_backup(path):
+    # type: (str) -> Optional[str]
+    """None when ``path`` is a readable clinic database, else a Persian
+    reason — checked before it is allowed to replace the live DB."""
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return "فایل پشتیبان یافت نشد."
+    try:
+        conn = sqlite3.connect(path)
+    except sqlite3.Error:
+        return "فایل پشتیبان قابل باز شدن نیست."
+    try:
+        ok = conn.execute("PRAGMA integrity_check").fetchone()
+        if not ok or ok[0] != "ok":
+            return "فایل پشتیبان آسیب دیده است."
+        names = set(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"))
+        if not {"patients", "invoices", "settings"} <= names:
+            return "این فایل پشتیبان برنامه نیست."
+        return None
+    except sqlite3.Error:
+        return "فایل پشتیبان خوانا نیست."
+    finally:
+        conn.close()
+
+
+def _daily_backup():
+    # type: () -> None
+    """At most one automatic snapshot per calendar day (the first start of
+    the day), then prune to MAX_BACKUPS. Never raises."""
+    try:
+        stamp = BACKUP_PREFIX + _dt.datetime.now().strftime("%Y%m%d")
+        bdir = _backup_dir()
+        if os.path.isdir(bdir) and any(f.startswith(stamp)
+                                       for f in os.listdir(bdir)):
+            return
+        if _backup_db() is not None:
+            _prune_backups()
+    except Exception as exc:  # backups must never block startup
+        _log("daily backup failed: %s" % exc)
 
 
 def _is_empty(conn):
@@ -211,7 +267,10 @@ def _ensure_invoice_no_floor(conn):
 
 def _backup_dir():
     # type: () -> str
-    return os.path.join(_base_dir(), BACKUP_DIR)
+    # Next to the database itself (normally _base_dir()), so a run against
+    # another DB file — tests, smoke checks — never writes into the real
+    # backups folder.
+    return os.path.join(os.path.dirname(_db_path()), BACKUP_DIR)
 
 
 def _backup_db():

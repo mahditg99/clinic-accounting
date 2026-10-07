@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """HTML invoice/report printing helpers using QTextDocument (v2 UI).
 
-Self-contained copy of the legacy widgets/print_utils so app/ui has no
-dependency on the old package; adds build_proforma_html() matching the web's
-print-preview modal (پیش‌فاکتور + notes + optional doctor name).
+Reports print A4 portrait. Invoices print as the clinic's «برگه فاکتور
+بیمار» sheet: landscape on the paper chosen in settings, Nastaliq letterhead,
+faint hollow lettering behind, doctor name per the settings toggle.
 """
 from __future__ import annotations
 
@@ -47,6 +47,16 @@ def _print_font():
         return "Tahoma"
 
 
+def _nastaliq_font():
+    # type: () -> str
+    """Letterhead face (bundled IranNastaliq), body font as fallback."""
+    try:
+        from ..utils import nastaliq_font
+        return nastaliq_font()
+    except Exception:
+        return _print_font()
+
+
 # Palette mirrors the web's print sheet (deep teal ink, pulse-red accent).
 _INK = "#14222c"
 _TEAL = "#073d4e"
@@ -81,298 +91,401 @@ def _doc_style(font_name=None):
         "</style>" % (font_name, _INK, _TEAL, "#dbe4ea"))
 
 
-def _invoice_doc(app_title, subtitle, inv_no, issued, file_no, patient,
-                 doctor_name, notes, rows, total, paid, remaining,
-                 payments=None):
-    # type: (str, str, str, str, str, str, str, str, Sequence, int, int, int, Optional[Sequence]) -> str
-    """Desktop mirror of the web invoice print sheet (invoice_detail.html).
+# --------------------------------------------------------------------------- #
+# Patient invoice sheet («برگه فاکتور بیمار») — landscape form that follows the
+# clinic's paper pad. Fixed wording lives here, not in settings.
+# --------------------------------------------------------------------------- #
+_SHEET_TITLE = "برگه فاکتور بیمار"
+_SHEET_CLINIC_LINE = "کلینیک ارتوپدی فنی"
+_SHEET_CLINIC_NAME = "آذران طب"
+_SHEET_RULES = [
+    "وسیله تحویل داده شده به علت بهداشتی بودن پس گرفته نمی‌شود.",
+    "قبل از مراجعه جهت اطمینان از آماده بودن وسایل تماس حاصل فرمایید.",
+    "در صورت تحویل نگرفتن وسیله سفارش داده شده طی ۶ ماه پس از آماده شدن، "
+    "وسیله به کارگاه برگشت خورده و ما هیچ مسئولیتی در قبال آن نداریم.",
+    "لطفا هنگام مراجعه بعدی این برگه را همراه داشته باشید.",
+    "حضور بیمار در زمان تحویل وسیله ضروری است.",
+]
+_SHEET_ADDRESS = ("آدرس: تبریز، ۱۷ شهریور جدید، مابین تقاطع طالقانی و "
+                  "شریعتی، جنب کوچه شرکت، ساختمان پزشکان نوین، طبقه ۵ واحد A")
+_SHEET_CONTACT = ("لطفا برای پیگیری در ساعات کاری شنبه تا چهارشنبه (صبح‌ها "
+                  "۱۰:۳۰ تا ۱۳:۳۰ و عصرها ۱۶ تا ۲۱) با شماره ۰۴۱۳۵۵۳۵۶۷۵ "
+                  "تماس بگیرید.")
 
-    Qt5 facts (measured from QPdfWriter glyph coordinates):
-     * table columns and inline blocks ALWAYS flow left-to-right whatever
-       `dir` says -> every horizontal structure is emitted in REVERSED
-       source order, so the element that must appear rightmost is emitted
-       LAST;
-     * the `direction:` CSS property is ignored (dir attr + explicit
-       text-align are honoured per block);
-     * the document is laid out at its own textWidth unless _doc_print
-       pins it to the page.
+_SHEET_INK = "#161616"
+_SHEET_LINE = "#2b2b2b"
+_SHEET_BRAND = "#1f3a68"
+_SHEET_RED = "#c0392b"
+# Lilac (بنفش یاسی) of the pad's letterhead and background emblem.
+_LILAC = "#9a6bbf"
+
+# Paper -> text zoom. The sheet is designed at A5-landscape width (zoom 1.0);
+# A4 landscape is ~1.45x wider, so type grows (1.2x) instead of leaving the
+# form tiny in a corner.
+_PAPER_ZOOM = {"A5": 1.0, "A4": 1.2}
+
+
+def _paper_from_settings():
+    # type: () -> str
+    from .. import settings as settings_mod
+    paper = (settings_mod.get_setting("print_size", "A4") or "A4").upper()
+    return paper if paper in _PAPER_ZOOM else "A4"
+
+
+def invoice_page_opts():
+    # type: () -> dict
+    """Page setup for the invoice sheet: landscape, paper from «اندازه چاپ»,
+    watermark on. Pass to show_print_preview / print_html_direct."""
+    return {"paper": _paper_from_settings(), "landscape": True,
+            "watermark": True}
+
+
+def _invoice_sheet(data, zoom=None):
+    # type: (dict, Optional[float]) -> str
+    """Invoice print HTML. ``data`` keys: invoice_no, issued_iso, time (str,
+    may be empty), file_no, patient_name, doctor_name (empty = blank cell),
+    total, paid, remaining, rows (title/quantity/unit_price/row_total), notes.
+
+    Qt5 rich text lays table columns out left-to-right whatever `dir` says,
+    so every horizontal structure is emitted in REVERSED source order (see
+    the notes above _doc_style). Widths are percentages, so the same markup
+    fills any paper the printer reports.
     """
+    z = float(zoom if zoom is not None else _PAPER_ZOOM[_paper_from_settings()])
     font = _print_font()
-    inv_no = date_utils.to_persian_digits(str(inv_no))
-    file_no = date_utils.to_persian_digits(str(file_no))
-    issued = date_utils.to_persian_digits(str(issued))
 
-    # ---- letterhead: heading block (right) + number clip (left) --------- #
-    # Meta chips in a 3-cell strip (web .inv-meta flex row). Emitted in
-    # reversed source order: پرونده cell last so it lands rightmost.
-    chip_css = (f"width:180px;border:none;padding:0 16px;"
-                f"font-size:12px;color:{_MUTED};")
-    chips = (
-        f"<td dir='rtl' style='{chip_css}'>پزشک معالج: "
-        f"<b style='color:{_INK};'>{_esc(doctor_name)}</b></td>"
-        if doctor_name
-        else "<td style='width:180px;border:none;'></td>")
-    chips += (
-        f"<td dir='rtl' style='{chip_css}'>تاریخ صدور: "
-        f"<b style='color:{_INK};'>{_esc(issued)}</b></td>"
-        f"<td dir='rtl' style='{chip_css}'>شماره پرونده: "
-        f"<b style='color:{_INK};'>{_esc(file_no)}</b></td>")
-    right_block = (
-        f"<div style='font-size:13px;font-weight:bold;color:{_TEAL};'>"
-        f"{_esc(app_title)} &nbsp;&nbsp;—&nbsp;&nbsp; {_esc(subtitle)}</div>"
-        f"<div style='font-size:22px;font-weight:bold;color:{_INK};'>"
-        f"{_esc(patient) or '—'}</div>"
-        "<table dir='rtl' width='540' cellspacing='0' cellpadding='0'>"
-        f"<tr>{chips}</tr></table>")
-    clip = (
-        f"<td valign='top' dir='rtl' width='165' style='width:165px;"
-        f"text-align:center;border:1px solid {_LINE};background:#eef4f7;"
-        f"padding:10px 14px;'>"
-        f"<div style='font-size:10.5px;font-weight:bold;color:{_TEAL};'>"
-        f"شماره فاکتور</div>"
-        f"<div style='font-size:21px;font-weight:bold;color:{_TEAL};'>"
-        f"{inv_no}</div>"
-        f"<div style='font-size:11.5px;font-weight:bold;color:{_TEAL};"
-        f"margin-top:4px;'>"
-        f"{_esc(issued)}</div></td>")
+    def fs(n):
+        return "font-size:%dpx;" % int(round(n * z))
+
+    def pad(v, h):
+        return "padding:%dpx %dpx;" % (int(round(v * z)), int(round(h * z)))
+
+    line = "1px solid %s" % _SHEET_LINE
+    fa = date_utils.to_persian_digits
+
+    def money(value):
+        return _esc(_money(int(value))) + " تومان"
+
+    # ---- header: [date + number] [clinic mark] [title]  (reversed) -------- #
+    stamp = _esc(date_utils.iso_to_jalali_long_persian_str(
+        data.get("issued_iso")))
+    if data.get("time"):
+        stamp += " - ساعت " + _esc(fa(data["time"]))
     head = (
-        "<table dir='rtl' width='745' cellspacing='0' cellpadding='0'><tr>"
-        f"{clip}"
-        "<td valign='top' dir='rtl' width='30' style='width:30px;"
-        "border:none;'></td>"
-        f"<td valign='top' dir='rtl' width='550' style='width:550px;"
-        f"border:none;'>{right_block}</td></tr></table>"
-        "<table dir='rtl' width='745' cellspacing='0' cellpadding='0'>"
-        f"<tr><td style='border:none;background:{_LINE};height:1px;"
-        "'>&nbsp;</td></tr></table>")
-    # ---- notes box (sits under the heading, on the right) ---------------- #
+        "<table dir='rtl' width='100%' cellspacing='0' cellpadding='0'><tr>"
+        f"<td dir='rtl' width='34%' valign='middle' style='{pad(8, 14)}"
+        f"{fs(12.5)}text-align:right;'>{stamp}<br/>"
+        f"شماره فاکتور {_esc(fa(str(data.get('invoice_no', ''))))}</td>"
+        f"<td dir='rtl' width='32%' valign='middle' style='{pad(8, 4)}"
+        f"text-align:center;'>{_letterhead_img(z)}</td>"
+        f"<td dir='rtl' width='34%' valign='middle' style='{pad(8, 14)}"
+        f"{fs(17)}font-weight:bold;'>{_SHEET_TITLE}</td>"
+        "</tr></table>")
+
+    # ---- patient / money grid: label | value | label | value (reversed) --- #
+    def grid_row(l1, v1, l2, v2):
+        edge = f"border-top:{line};"
+        cells = (
+            f"<td dir='rtl' width='33%' style='{edge}border-right:{line};"
+            f"{pad(5, 12)}{fs(13)}font-weight:bold;'>{v2}</td>"
+            f"<td dir='rtl' width='13%' style='{edge}{pad(5, 12)}{fs(13)}"
+            f"font-weight:bold;'>{l2}</td>"
+            f"<td dir='rtl' width='40%' style='{edge}{pad(5, 12)}{fs(13)}"
+            f"font-weight:bold;'>{v1}</td>"
+            f"<td dir='rtl' width='14%' style='{edge}{pad(5, 12)}{fs(13)}"
+            f"font-weight:bold;'>{l1}</td>")
+        return f"<tr>{cells}</tr>"
+
+    grid = (
+        "<table dir='rtl' width='100%' cellspacing='0' cellpadding='0'>"
+        + grid_row("شماره پرونده", _esc(fa(str(data.get("file_no", "")))),
+                   "هزینه", money(data.get("total", 0)))
+        + grid_row("نام بیمار", _esc(data.get("patient_name", "")),
+                   "بیعانه", money(data.get("paid", 0)))
+        + grid_row("نام پزشک", _esc(data.get("doctor_name", "")),
+                   "مانده", money(data.get("remaining", 0)))
+        + "</table>")
+
+    # ---- items: ردیف | وسیله طبی | تعداد | قیمت واحد | جمع  (reversed) ------ #
+    def item_cell(width, text, extra="", head_row=False):
+        edge = (f"border-top:{line};" if head_row
+                else "border-top:1px solid #8a8a8a;")
+        return (f"<td dir='rtl' width='{width}%' style='{edge}{pad(4, 10)}"
+                f"{fs(13)}{extra}'>{text}</td>")
+
+    def item_row(idx, title, qty, unit, total, head_row=False):
+        b = "font-weight:bold;" if head_row else ""
+        return ("<tr>" + item_cell(18, total, b, head_row)
+                + item_cell(18, unit, b, head_row)
+                + item_cell(11, qty, b, head_row)
+                + item_cell(44, title, b, head_row)
+                + item_cell(9, idx, b, head_row) + "</tr>")
+
+    items = [item_row("ردیف", "وسیله طبی", "تعداد", "قیمت واحد", "جمع",
+                      head_row=True)]
+    for i, r in enumerate(data.get("rows") or [], 1):
+        items.append(item_row(
+            fa(str(i)), _esc(r["title"]), _esc(fa(str(r["quantity"]))),
+            _esc(_money(r["unit_price"])), _esc(_money(r["row_total"]))))
+    items_html = ("<table dir='rtl' width='100%' cellspacing='0' "
+                  "cellpadding='0'>" + "".join(items) + "</table>")
+
+    # ---- free-text notes (only when the operator wrote any) --------------- #
     notes_html = ""
-    if notes:
+    if data.get("notes"):
         notes_html = (
-            "<table dir='rtl' width='745' cellspacing='0' cellpadding='0'>"
-            "<tr><td width='285' style='width:285px;border:none;"
-            "'></td>"
-            f"<td dir='rtl' width='460' style='width:460px;"
-            f"border:1px solid {_LINE};background:{_ZEBRA};padding:8px 12px;"
-            f"font-size:12px;color:{_INK};'>{_esc(notes)}</td></tr></table>")
-    # ---- items table (web columns; reversed) ----------------------------- #
-    body_rows = []
-    for i, r in enumerate(rows):
-        bg = _ZEBRA if i % 2 else "#ffffff"
-        body_rows.append(
-            f"<tr style='background:{bg};'>"
-            "<td dir='rtl' width='130' style='text-align:right;width:130px;"
-            "font-weight:bold;'>"
-            f"{_esc(_money(r['row_total']))}</td>"
-            "<td dir='rtl' width='130' style='text-align:right;width:130px;'>"
-            f"{_esc(_money(r['unit_price']))}</td>"
-            "<td dir='rtl' width='90' style='text-align:right;width:90px;'>"
-            f"{_esc(date_utils.to_persian_digits(str(r['quantity'])))}</td>"
-            "<td dir='rtl' width='395' style='text-align:left;width:395px;'>"
-            f"{_esc(r['title'])}</td></tr>")
-    if not body_rows:
-        body_rows.append(
-            "<tr><td colspan='4' dir='rtl' style='text-align:center;"
-            f"color:{_MUTED};'>اقلامی ثبت نشده است.</td></tr>")
-    table = (
-        "<table dir='rtl' width='745' cellspacing='0' cellpadding='0' "
-        f"style='border:1px solid {_LINE};'>"
-        f"<tr style='background:{_TEAL};'>"
-        "<th dir='rtl' width='130' style='text-align:right;padding:6px 8px;"
-        "width:130px;'>جمع (تومان)</th>"
-        "<th dir='rtl' width='130' style='text-align:right;padding:6px 8px;"
-        "width:130px;'>فی (تومان)</th>"
-        "<th dir='rtl' width='90' style='text-align:right;padding:6px 8px;"
-        "width:90px;'>تعداد</th>"
-        "<th dir='rtl' width='395' style='text-align:left;padding:6px 8px;"
-        "width:395px;'>نام کالا / خدمت</th>"
-        f"</tr>{''.join(body_rows)}</table>")
-    # ---- settlement ledger (lower-LEFT, like the web) -------------------- #
-    rem_color = "#c03b4a" if int(remaining) > 0 else "#2e8b6a"
-    totals = (
-        "<table dir='rtl' width='745' cellspacing='0' cellpadding='0'><tr>"
-        "<td valign='top' dir='rtl' width='340' style='width:340px;"
-        "padding:0;border:none;'>"
-        "<table dir='rtl' width='340' cellspacing='0' cellpadding='0' "
-        f"style='border:1px solid {_LINE};'>"
-        "<tr>"
-        "<td dir='rtl' style='text-align:right;font-weight:bold;padding:7px"
-        f" 10px;width:165px;'>{_esc(_money(total))}</td>"
-        "<td dir='rtl' style='background:#eef4f7;padding:"
-        "7px 10px;width:175px;'>جمع کل</td></tr>"
-        "<tr>"
-        "<td dir='rtl' style='text-align:right;font-weight:bold;padding:7px"
-        f" 10px;color:#2e8b6a;width:165px;'>{_esc(_money(paid))}</td>"
-        "<td dir='rtl' style='background:#eef4f7;padding:"
-        "7px 10px;width:175px;'>پرداخت‌شده</td></tr>"
-        "<tr>"
-        "<td dir='rtl' style='text-align:right;font-weight:bold;font-size:"
-        f"15px;padding:7px 10px;border-bottom:none;color:{rem_color};"
-        f"width:165px;'>{_esc(_money(remaining))}</td>"
-        "<td dir='rtl' style='background:#eef4f7;padding:"
-        "7px 10px;font-weight:bold;border-bottom:none;width:175px;'>"
-        "باقی‌مانده</td></tr>"
-        "</table></td>"
-        "<td width='405' style='width:405px;padding:0;border:none;'>"
+            "<table dir='rtl' width='100%' cellspacing='0' cellpadding='0'>"
+            f"<tr><td dir='rtl' style='border-top:1px solid #8a8a8a;"
+            f"{pad(4, 10)}{fs(12.5)}'><b>توضیحات:</b> "
+            f"{_esc(data['notes'])}</td></tr></table>")
+
+    # ---- fixed terms, address and phone ----------------------------------- #
+    rules = []
+    for i, text in enumerate(_SHEET_RULES, 1):
+        color = _SHEET_RED if i == len(_SHEET_RULES) else _SHEET_INK
+        rules.append(
+            f"<div style='{fs(12)}font-weight:bold;color:{color};"
+            f"margin:0px;'>{fa(str(i))}. {_esc(text)}</div>")
+    foot = (
+        "<table dir='rtl' width='100%' cellspacing='0' cellpadding='0'><tr>"
+        f"<td dir='rtl' style='border-top:{line};{pad(8, 12)}'>"
+        + "".join(rules)
+        + f"<div style='{fs(5)}'>&nbsp;</div>"
+        f"<div style='{fs(12)}margin:0px;'>{_esc(_SHEET_ADDRESS)}</div>"
+        f"<div style='{fs(5)}'>&nbsp;</div>"
+        f"<div style='{fs(12)}text-align:center;margin:0px;'>"
+        f"{_esc(_SHEET_CONTACT)}</div>"
         "</td></tr></table>")
-    # ---- payments table --------------------------------------------------- #
-    pay_html = ""
-    if payments:
-        prows = []
-        for i, p in enumerate(payments):
-            bg = _ZEBRA if i % 2 else "#ffffff"
-            prows.append(
-                f"<tr style='background:{bg};'>"
-                "<td dir='rtl' width='150' style='text-align:right;width:150px;"
-                f"font-weight:bold;'>{_esc(_money(int(p['amount'])))}</td>"
-                "<td dir='rtl' width='595' style='width:595px;'>"
-                f"{_esc(p.get('method') or '—')}</td></tr>")
-        # Qt5 ignores text-align/dir on BARE body-level divs (probe-proven:
-        # such blocks always flow from the left margin) — only blocks inside
-        # a dir='rtl' table cell honour right alignment. So the heading
-        # rides a one-cell table like every other heading in this doc.
-        pay_html = (
-            "<table dir='rtl' width='745' cellspacing='0' cellpadding='0'>"
-            f"<tr><td dir='rtl' width='745' style='width:745px;"
-            f"border:none;font-size:13.5px;font-weight:"
-            f"bold;color:{_INK};'>پرداخت‌ها</td></tr></table>"
-            "<table dir='rtl' width='745' cellspacing='0' cellpadding='0' "
-            f"style='border:1px solid {_LINE};'>"
-            f"<tr style='background:{_TEAL};'>"
-            "<th dir='rtl' width='150' style='text-align:right;padding:6px"
-            " 8px;width:150px;'>مبلغ</th>"
-            "<th dir='rtl' width='595' style='text-align:left;padding:6px"
-            " 8px;width:595px;'>روش پرداخت</th>"
-            f"</tr>{''.join(prows)}</table>")
-    gap = "<div style='font-size:10px;'>&nbsp;</div>"
-    gap_sm = "<div style='font-size:5px;'>&nbsp;</div>"
+
     return (
-        "<html><head>" + _doc_style(font) + "</head>"
-        f"<body dir='rtl' style=\"font-family:'{font}'; color:{_INK};"
+        "<html><head><style>"
+        f"body{{font-family:'{font}'; color:{_SHEET_INK};}}"
+        "table{border-collapse:collapse;} td{padding:0px;}"
+        "</style></head>"
+        f"<body dir='rtl' style=\"font-family:'{font}'; color:{_SHEET_INK};"
         " text-align:right;\">"
-        + head
-        + (gap_sm + notes_html if notes_html else "")
-        + gap + table + gap + totals
-        + (gap + pay_html if pay_html else "")
-        + "</body></html>")
+        "<table dir='rtl' width='100%' cellspacing='0' cellpadding='0' "
+        f"border='1' style='border-style:solid;border-color:{_SHEET_LINE};'>"
+        "<tr><td dir='rtl' style='padding:0px;border-style:none;'>"
+        + head + grid + items_html + notes_html + foot
+        + "</td></tr></table></body></html>")
 
 
-def build_invoice_html(invoice):
-    # type: (dict) -> str
-    """invoice dict keys: app_title, invoice_no, issued_at (ISO),
-    patient_name, file_no, doctor_name(optional), rows (list of dicts with
-    title, unit_price, quantity, row_total), total, paid, remaining,
-    show_doctor (bool), notes(optional)."""
-    return _invoice_doc(
-        invoice.get("app_title", "آذران طب"), "فاکتور",
-        str(invoice.get("invoice_no", "")),
-        _jalali(invoice.get("issued_at")),
-        str(invoice.get("file_no", "")),
-        invoice.get("patient_name", ""),
-        invoice.get("doctor_name", "") if invoice.get("show_doctor") else "",
-        invoice.get("notes", "") or "",
-        invoice.get("rows", []) or [],
-        int(invoice.get("total", 0)), int(invoice.get("paid", 0)),
-        int(invoice.get("remaining", 0)),
-        invoice.get("payments") or None)
+# --------------------------------------------------------------------------- #
+# Letterhead «کلینیک ارتوپدی فنی / آذران طب» in Nastaliq.
+#
+# Rendered to an image instead of rich text: Nastaliq's ascent/descent is
+# reported very differently by the Windows font engine and by FreeType, so as
+# HTML text the second line ran over the header's bottom rule on Windows.
+# Painting it here and cropping to the actual ink gives the same size and
+# placement on every machine. The image is registered on the QTextDocument
+# (attach_resources) under _LH_SCHEME.
+# --------------------------------------------------------------------------- #
+_LH_SCHEME = "azaran-letterhead"
+_LH_SCALE = 4.0          # image px per CSS px (sharp at 300dpi print)
+_LH_CACHE = {}           # zoom key -> (QImage, css_w, css_h)
 
 
-def build_proforma_html(data):
-    # type: (dict) -> str
-    """Unsaved invoice preview (mirrors the web's buildPrintHTML).
-    Keys: app_title, invoice_no, issued_jalali (display str), patient_name,
+_DARK = None  # compiled lazily: any byte darker than 200
+
+
+def _ink_rect(img):
+    # type: (Any) -> Any
+    """Bounding rect of the painted (non-transparent) pixels of ``img``
+    (None if blank). Scans alpha rows as bytes (C-speed regex)."""
+    global _DARK
+    import re
+    if _DARK is None:
+        _DARK = re.compile(b"[\x38-\xff]")
+    g = img.convertToFormat(_Gui.QImage.Format_Alpha8)
+    w, h, bpl = g.width(), g.height(), g.bytesPerLine()
+    ptr = g.constBits()
+    ptr.setsize(bpl * h)
+    data = bytes(ptr)
+    top, bottom, left, right = None, None, w, -1
+    for y in range(h):
+        row = data[y * bpl:y * bpl + w]
+        m = _DARK.search(row)
+        if m is None:
+            continue
+        if top is None:
+            top = y
+        bottom = y
+        if m.start() < left:
+            left = m.start()
+        last = w - 1 - _DARK.search(row[::-1]).start()
+        if last > right:
+            right = last
+    if top is None:
+        return None
+    return _Core.QRect(left, top, right - left + 1, bottom - top + 1)
+
+
+def _render_line(text, px):
+    # type: (str, int) -> Any
+    """One Nastaliq line drawn on a white canvas and cropped to its ink."""
+    font = _Gui.QFont(_nastaliq_font())
+    font.setPixelSize(int(px))
+    font.setBold(True)
+    w, h = int(px * len(text) * 0.9) + 40, int(px * 3.2)
+    img = _Gui.QImage(w, h, _Gui.QImage.Format_ARGB32_Premultiplied)
+    img.fill(_Core.Qt.transparent)
+    p = _Gui.QPainter(img)
+    try:
+        p.setRenderHint(_Gui.QPainter.Antialiasing, True)
+        p.setRenderHint(_Gui.QPainter.TextAntialiasing, True)
+        p.setFont(font)
+        p.setPen(_Gui.QColor(_LILAC))
+        p.setLayoutDirection(_Core.Qt.RightToLeft)
+        p.drawText(_Core.QRectF(0, 0, w, h),
+                   _Core.Qt.AlignCenter | _Core.Qt.TextSingleLine, text)
+    finally:
+        p.end()
+    r = _ink_rect(img)
+    return img.copy(r) if r is not None else img
+
+
+def _letterhead(zoom):
+    # type: (float) -> tuple
+    key = "%.2f" % zoom
+    hit = _LH_CACHE.get(key)
+    if hit is not None:
+        return hit
+    k = _LH_SCALE * zoom
+    l1 = _render_line(_SHEET_CLINIC_LINE, 27 * k)
+    l2 = _render_line(_SHEET_CLINIC_NAME, 38 * k)
+    gap = int(2 * k)
+    w = max(l1.width(), l2.width())
+    h = l1.height() + gap + l2.height()
+    img = _Gui.QImage(w, h, _Gui.QImage.Format_ARGB32_Premultiplied)
+    img.fill(_Core.Qt.transparent)
+    p = _Gui.QPainter(img)
+    try:
+        p.drawImage((w - l1.width()) // 2, 0, l1)
+        p.drawImage((w - l2.width()) // 2, l1.height() + gap, l2)
+    finally:
+        p.end()
+    hit = (img, int(round(w / _LH_SCALE)), int(round(h / _LH_SCALE)))
+    _LH_CACHE[key] = hit
+    return hit
+
+
+def _letterhead_img(zoom):
+    # type: (float) -> str
+    """<img> tag for the letterhead (falls back to plain text off-Qt)."""
+    try:
+        _img, cw, ch = _letterhead(zoom)
+    except Exception:
+        return "%s<br/>%s" % (_SHEET_CLINIC_LINE, _SHEET_CLINIC_NAME)
+    return ("<img src='%s:%.2f' width='%d' height='%d'/>"
+            % (_LH_SCHEME, zoom, cw, ch))
+
+
+def attach_resources(doc):
+    # type: (Any) -> None
+    """Register the letterhead images on a QTextDocument (print documents
+    and the QTextEdit preview) before its HTML is set."""
+    for key, (img, _w, _h) in list(_LH_CACHE.items()):
+        doc.addResource(_Gui.QTextDocument.ImageResource,
+                        _Core.QUrl("%s:%s" % (_LH_SCHEME, key)), img)
+
+
+def _issue_time(issued_at):
+    # type: (Optional[str]) -> str
+    """HH:MM for the sheet header. issued_at is normally date-only, so the
+    clock time is only known for a sheet issued today (printed now); older
+    invoices print without a time rather than with a made-up one."""
+    s = str(issued_at or "")
+    if len(s) >= 16 and s[10] in " T":
+        return s[11:16]
+    if s[:10] == date_utils.today_iso():
+        return date_utils.now_iso()[11:16]
+    return ""
+
+
+def build_invoice_html(invoice, zoom=None):
+    # type: (dict, Optional[float]) -> str
+    """invoice dict keys: invoice_no, issued_at (ISO), patient_name, file_no,
+    doctor_name, show_doctor (bool), notes (optional), rows (title,
+    unit_price, quantity, row_total), total, paid, remaining."""
+    return _invoice_sheet({
+        "invoice_no": invoice.get("invoice_no", ""),
+        "issued_iso": invoice.get("issued_at"),
+        "time": _issue_time(invoice.get("issued_at")),
+        "file_no": invoice.get("file_no", ""),
+        "patient_name": invoice.get("patient_name", ""),
+        "doctor_name": invoice.get("doctor_name", "")
+        if invoice.get("show_doctor") else "",
+        "notes": invoice.get("notes", "") or "",
+        "rows": invoice.get("rows", []) or [],
+        "total": int(invoice.get("total", 0)),
+        "paid": int(invoice.get("paid", 0)),
+        "remaining": int(invoice.get("remaining", 0)),
+    }, zoom)
+
+
+def build_proforma_html(data, zoom=None):
+    # type: (dict, Optional[float]) -> str
+    """Unsaved invoice preview. Keys: invoice_no, issued_iso, patient_name,
     file_no, doctor_name, show_doctor, notes, rows, total, paid."""
     total = int(data.get("total", 0))
     paid = int(data.get("paid", 0))
-    return _invoice_doc(
-        data.get("app_title", "آذران طب"), "پیش‌فاکتور",
-        str(data.get("invoice_no", "")), data.get("issued_jalali", ""),
-        str(data.get("file_no", "")), data.get("patient_name", "—"),
-        data.get("doctor_name", "") if data.get("show_doctor") else "",
-        data.get("notes", "") or "",
-        data.get("rows", []) or [], total, paid, total - paid,
-        data.get("payments") or None)
+    return build_invoice_html({
+        "invoice_no": data.get("invoice_no", ""),
+        "issued_at": data.get("issued_iso"),
+        "patient_name": data.get("patient_name", "—"),
+        "file_no": data.get("file_no", ""),
+        "doctor_name": data.get("doctor_name", ""),
+        "show_doctor": data.get("show_doctor"),
+        "notes": data.get("notes", ""),
+        "rows": data.get("rows", []),
+        "total": total, "paid": paid, "remaining": total - paid,
+    }, zoom)
 
 
-def build_saved_invoice_html(invoice_id, show_doctor=None):
-    # type: (int, Optional[bool]) -> Optional[str]
+def build_saved_invoice_html(invoice_id, zoom=None):
+    # type: (int, Optional[float]) -> Optional[str]
     """Print HTML for a persisted invoice — the single builder behind the
-    archive's «مشاهده / چاپ» and the post-save print preview.
-
-    ``show_doctor``: explicit choice for this print; ``None`` falls back to
-    the settings-page value (which is only the *default*, see
-    show_invoice_preview)."""
+    archive's «مشاهده / چاپ» and the post-save print preview. The doctor's
+    name appears only when «نمایش نام پزشک در چاپ» is on in the settings."""
     from .. import models, settings as settings_mod
+    from ..database import NO_DOCTOR_NAME
     inv = models.get_invoice(invoice_id)
     if inv is None:
         return None
     items = models.list_invoice_items(invoice_id)
     paid = models.invoice_paid_sum(invoice_id)
-    if show_doctor is None:
-        show_doctor = settings_mod.get_setting("show_doctor_in_print",
-                                               "0") == "1"
+    show_doctor = settings_mod.get_setting("show_doctor_in_print",
+                                           "0") == "1"
+    doctor = (inv.get("doctor_name") or "").strip()
+    if doctor == NO_DOCTOR_NAME:
+        doctor = ""
     return build_invoice_html({
-        "app_title": settings_mod.get_setting("app_title", "آذران طب"),
         "invoice_no": inv["invoice_no"],
         "issued_at": inv["issued_at"],
         "patient_name": "%s %s" % (inv["first_name"], inv["last_name"]),
         "file_no": inv["file_no"],
-        "doctor_name": inv.get("doctor_name") or "",
-        "show_doctor": bool(show_doctor),
+        "doctor_name": doctor,
+        "show_doctor": show_doctor,
         "notes": inv.get("notes") or "",
         "rows": [{"title": it["title"], "unit_price": it["unit_price"],
                   "quantity": it["quantity"], "row_total": it["row_total"]}
                  for it in items],
-        "payments": [{"method": p["method"], "amount": int(p["amount"])}
-                     for p in models.list_payments(invoice_id)],
         "total": int(inv["total_amount"]),
         "paid": paid,
         "remaining": int(inv["total_amount"]) - paid,
-    })
-
-
-def _ask_show_doctor(parent):
-    # type: (Any) -> Optional[bool]
-    """Per-print choice for «نام پزشک در چاپ»; the settings-page toggle only
-    decides which button is the default. None = user cancelled."""
-    from .. import settings as settings_mod
-    default = settings_mod.get_setting("show_doctor_in_print", "0") == "1"
-    box = _Widgets.QMessageBox(parent)
-    box.setWindowTitle("پیش‌نمایش چاپ")
-    box.setText("نام پزشک معالج در این فاکتور چاپ شود؟")
-    box.setIcon(_Widgets.QMessageBox.Question)
-    box.setLayoutDirection(_Core.Qt.RightToLeft)
-    b_yes = box.addButton("با نام پزشک", _Widgets.QMessageBox.AcceptRole)
-    b_no = box.addButton("بدون نام پزشک", _Widgets.QMessageBox.DestructiveRole)
-    b_cancel = box.addButton("انصراف", _Widgets.QMessageBox.RejectRole)
-    box.setDefaultButton(b_yes if default else b_no)
-    box.exec_()
-    clicked = box.clickedButton()
-    if clicked is b_cancel or clicked is None:
-        return None
-    return clicked is b_yes
+    }, zoom)
 
 
 def show_invoice_preview(parent, invoice_id):
     # type: (Any, int) -> bool
-    """Ask whether the doctor's name should appear (settings value = the
-    default button), then open the A4-portrait print preview for a saved
-    invoice. Returns True when the preview was shown."""
-    from .. import models
-    inv = models.get_invoice(invoice_id)
-    if inv is None:
+    """Open the print preview for a saved invoice. Whether the doctor's name
+    is printed is decided by the settings page — no per-print question."""
+    html = build_saved_invoice_html(invoice_id)
+    if not html:
         return False
-    show_doctor = None
-    doc_name = (inv.get("doctor_name") or "").strip()
-    if doc_name and doc_name != "بدون معرف":
-        show_doctor = _ask_show_doctor(parent)
-        if show_doctor is None:
-            return False
-    html = build_saved_invoice_html(invoice_id, show_doctor=show_doctor)
-    if html:
-        show_print_preview(parent, html)
-        return True
-    return False
+    show_print_preview(parent, html, page=invoice_page_opts())
+    return True
 
 
 def _make_doc(html):
@@ -386,6 +499,7 @@ def _make_doc(html):
         doc.setDefaultFont(f)
     except Exception:
         pass
+    attach_resources(doc)
     doc.setHtml(html)
     return doc
 
@@ -402,42 +516,45 @@ def _printer_mode():
     return 0
 
 
-def _portrait_value():
-    # type: () -> Optional[Any]
-    """Portrait orientation constant for the active binding.
-
-    Qt5: QPrinter.Portrait (PyQt5) / QPrinter.PageOrientation.Portrait
-    (PySide2).  There is *no* Qt.Portrait in Qt5 — reading it off QtCore.Qt
-    raised AttributeError and crashed the archive preview.
-    Qt6 (defensive): QPageLayout.Orientation.Portrait.
-    """
-    qps = _Print.QPrinter
-    v = getattr(qps, "Portrait", None)          # PyQt5
-    if v is not None:
-        return v
-    po = getattr(qps, "PageOrientation", None)  # PySide2 / newer PyQt5
-    v = getattr(po, "Portrait", None)
-    if v is not None:
-        return v
-    gl = getattr(_Gui, "QPageLayout", None)     # Qt6-style fallback
-    v = getattr(getattr(gl, "Orientation", None), "Portrait", None)
-    return v
-
-
 def _setup_a4_portrait(printer):
     # type: (_Print.QPrinter) -> None
     try:
         printer.setPaperSize(_Print.QPrinter.A4)
     except Exception:
         pass
-    orient = _portrait_value()
-    if orient is not None:
-        try:
-            printer.setPageOrientation(orient)
-        except Exception:
-            # Portrait is the QPrinter default anyway; a failed enum call
-            # must never take the whole preview down with it.
-            pass
+    try:
+        # QPrinter.setOrientation takes QPrinter.Orientation. The former
+        # setPageOrientation(QPrinter.Portrait) call raised TypeError
+        # (that one wants QPageLayout.Orientation) and was swallowed.
+        printer.setOrientation(_Print.QPrinter.Portrait)
+    except Exception:
+        pass
+
+
+def _setup_page(printer, page):
+    # type: (_Print.QPrinter, Optional[dict]) -> None
+    """Paper/orientation for a print job. ``page`` is None for the A4
+    portrait reports, or the dict from invoice_page_opts() (paper size,
+    landscape flag, watermark flag)."""
+    if not page:
+        _setup_a4_portrait(printer)
+        return
+    qps = _Print.QPrinter
+    try:
+        printer.setPaperSize(qps.A5 if page.get("paper") == "A5" else qps.A4)
+    except Exception:
+        pass
+    try:
+        # QPrinter.Orientation (Qt5). Not setPageOrientation(): that takes
+        # QPageLayout.Orientation and rejects QPrinter.Landscape.
+        printer.setOrientation(qps.Landscape if page.get("landscape")
+                               else qps.Portrait)
+    except Exception:
+        pass
+    try:
+        printer.setPageMargins(8, 8, 8, 8, qps.Millimeter)
+    except Exception:
+        pass
 
 
 _RASTER_DPI = 300  # print quality when a page must go out as an image
@@ -458,8 +575,205 @@ def _paint_ctx():
     return ctx
 
 
-def _draw_vector(layout, painter, ctx, pw, ph, scale, total, printer):
-    # type: (Any, Any, Any, float, float, float, float, Any) -> None
+_WM_COLOR = _LILAC
+
+
+def _shaped_text_path(text, font):
+    # type: (str, Any) -> Any
+    """Outline of ``text`` after real RTL shaping (joined letters).
+
+    QPainterPath.addText() does not shape Persian with the Windows font
+    engine — it produced separate letters in reverse order. QTextLayout
+    shapes the run; the glyph outlines are then taken from its glyph runs.
+    simplified() merges overlapping contours of the variable font so the
+    stroke shows only each letter's outer edge."""
+    layout = _Gui.QTextLayout(text, font)
+    opt = _Gui.QTextOption()
+    opt.setTextDirection(_Core.Qt.RightToLeft)
+    layout.setTextOption(opt)
+    layout.beginLayout()
+    line = layout.createLine()
+    line.setLineWidth(100000.0)
+    layout.endLayout()
+    path = _Gui.QPainterPath()
+    for run in layout.glyphRuns():
+        raw = run.rawFont()
+        for gi, pos in zip(run.glyphIndexes(), run.positions()):
+            gp = raw.pathForGlyph(gi)
+            gp.translate(pos)
+            path.addPath(gp)
+    return path.simplified()
+
+
+def _outlined_text(painter, text, center, width, pen, brush=None):
+    # type: (Any, str, Any, float, Any, Any) -> None
+    """Hollow text scaled to ``width``, centred on ``center``."""
+    font = _Gui.QFont(_print_font())
+    font.setBold(True)
+    font.setPixelSize(100)
+    path = _shaped_text_path(text, font)
+    box = path.boundingRect()
+    if box.width() <= 0:
+        return
+    k = width / box.width()
+    painter.save()
+    painter.translate(center.x(), center.y())
+    painter.scale(k, k)
+    painter.translate(-box.center().x(), -box.center().y())
+    p = _Gui.QPen(pen)
+    p.setWidthF(pen.widthF() / k)
+    painter.setPen(p)
+    painter.setBrush(brush if brush is not None else _Core.Qt.NoBrush)
+    painter.drawPath(path)
+    painter.restore()
+
+
+def _paint_watermark(painter, pw, ph):
+    # type: (Any, float, float) -> None
+    """The pad's background emblem — a knee — traced from the scanned sheet:
+
+    * a tall rounded frame drawn as a double line with a shaded band,
+    * an inner rounded frame, open at the top-left and notched at the
+      bottom where the shin passes through,
+    * the knee in side view: shaded thigh bone (femur) coming down from the
+      top-left and ending in a round condyle, a thin joint gap, the shaded
+      shin bone (tibia) with its flat top, the kneecap in front and the
+      tendon band curving round the front of the knee, plus the line of the
+      back of the leg,
+    * hollow lettering «ارتوپدی فنی» over «آذران طب» in the lower part.
+
+    Geometry is in emblem units (u across, v down, 0..1; the emblem is
+    1.42x taller than wide). ``ph`` is the form height on this page, so the
+    emblem stays inside the frame on any paper. Drawn in the page's 96dpi
+    CSS space before the text, so the form always prints on top of it."""
+    painter.save()
+    try:
+        painter.setRenderHint(_Gui.QPainter.Antialiasing, True)
+        H = ph * 0.96
+        W = H / 1.42
+        if W > pw * 0.6:
+            W = pw * 0.6
+            H = W * 1.42
+        x0 = pw * 0.47 - W / 2.0
+        y0 = ph * 0.02
+
+        def pt(u, v):
+            return _Core.QPointF(x0 + u * W, y0 + v * H)
+
+        def band_of(path, width):
+            stroker = _Gui.QPainterPathStroker()
+            stroker.setWidth(width)
+            stroker.setCapStyle(_Core.Qt.RoundCap)
+            stroker.setJoinStyle(_Core.Qt.RoundJoin)
+            return stroker.createStroke(path).simplified()
+
+        col = _Gui.QColor(_WM_COLOR)
+        stroke = _Gui.QPen(col, max(0.8, W * 0.012))
+        stroke.setJoinStyle(_Core.Qt.RoundJoin)
+        stroke.setCapStyle(_Core.Qt.RoundCap)
+        thin = _Gui.QPen(col, max(0.6, W * 0.006))
+        thin.setJoinStyle(_Core.Qt.RoundJoin)
+        thin.setCapStyle(_Core.Qt.RoundCap)
+
+        # -- frames --------------------------------------------------------
+        outer = _Gui.QPainterPath()
+        outer.addRoundedRect(_Core.QRectF(x0, y0, W, H), W * 0.10, W * 0.10)
+        ring_w = W * 0.035
+        inner_ring = _Gui.QPainterPath()
+        inner_ring.addRoundedRect(
+            _Core.QRectF(x0 + ring_w, y0 + ring_w,
+                         W - 2 * ring_w, H - 2 * ring_w),
+            W * 0.075, W * 0.075)
+        frame_band = outer.subtracted(inner_ring)
+
+        r = W * 0.063  # inner frame corner radius
+        inner = _Gui.QPainterPath(pt(0.575, 0.050))   # top-right part
+        inner.lineTo(pt(0.921, 0.050) - _Core.QPointF(r, 0))
+        inner.quadTo(pt(0.921, 0.050), pt(0.921, 0.050) + _Core.QPointF(0, r))
+        inner.lineTo(pt(0.921, 0.694) - _Core.QPointF(0, r))
+        inner.quadTo(pt(0.921, 0.694), pt(0.921, 0.694) - _Core.QPointF(r, 0))
+        inner.lineTo(pt(0.795, 0.694))
+        inner.lineTo(pt(0.795, 0.561))
+        inner.moveTo(pt(0.378, 0.561))                 # bottom-left part
+        inner.lineTo(pt(0.378, 0.694))
+        inner.lineTo(pt(0.071, 0.694) + _Core.QPointF(r, 0))
+        inner.quadTo(pt(0.071, 0.694), pt(0.071, 0.694) - _Core.QPointF(0, r))
+        inner.lineTo(pt(0.071, 0.205))
+
+        # -- knee ---------------------------------------------------------
+        femur = _Gui.QPainterPath(pt(0.323, 0.069))
+        femur.lineTo(pt(0.554, 0.069))
+        femur.quadTo(pt(0.620, 0.110), pt(0.658, 0.169))
+        femur.cubicTo(pt(0.745, 0.220), pt(0.745, 0.360), pt(0.606, 0.387))
+        femur.cubicTo(pt(0.500, 0.400), pt(0.465, 0.320), pt(0.485, 0.250))
+        femur.quadTo(pt(0.420, 0.150), pt(0.323, 0.069))
+
+        tibia = _Gui.QPainterPath(pt(0.491, 0.419))
+        tibia.quadTo(pt(0.625, 0.400), pt(0.764, 0.419))
+        tibia.lineTo(pt(0.764, 0.489))
+        tibia.quadTo(pt(0.748, 0.560), pt(0.748, 0.694))
+        tibia.lineTo(pt(0.575, 0.694))
+        tibia.lineTo(pt(0.575, 0.553))
+        tibia.quadTo(pt(0.560, 0.500), pt(0.501, 0.491))
+        tibia.closeSubpath()
+
+        tendon_line = _Gui.QPainterPath(pt(0.606, 0.058))
+        tendon_line.cubicTo(pt(0.720, 0.140), pt(0.880, 0.250),
+                            pt(0.855, 0.380))
+        tendon_line.quadTo(pt(0.845, 0.440), pt(0.838, 0.487))
+        tendon = band_of(tendon_line, W * 0.040)
+
+        kneecap_line = _Gui.QPainterPath(pt(0.784, 0.272))
+        kneecap_line.quadTo(pt(0.845, 0.320), pt(0.814, 0.376))
+        kneecap = band_of(kneecap_line, W * 0.030)
+
+        back_line = _Gui.QPainterPath(pt(0.071, 0.267))
+        back_line.lineTo(pt(0.449, 0.487))
+        back = band_of(back_line, W * 0.032)
+
+        # -- shading (light) ---------------------------------------------
+        painter.setPen(_Core.Qt.NoPen)
+        painter.setBrush(col)
+        painter.setOpacity(0.12)
+        painter.drawPath(frame_band)
+        painter.drawPath(tendon)
+        painter.drawPath(kneecap)
+        painter.drawPath(back)
+        painter.setOpacity(0.16)
+        painter.drawPath(femur)
+        painter.drawPath(tibia)
+
+        # -- outlines -----------------------------------------------------
+        painter.setBrush(_Core.Qt.NoBrush)
+        painter.setOpacity(0.30)
+        painter.setPen(thin)
+        painter.drawPath(outer)
+        painter.drawPath(inner_ring)
+        painter.drawPath(tendon)
+        painter.drawPath(kneecap)
+        painter.drawPath(back)
+        painter.drawPath(tibia)
+        painter.setPen(stroke)
+        painter.drawPath(inner)
+        painter.setPen(thin)
+        painter.drawPath(femur)
+
+        # -- hollow lettering ---------------------------------------------
+        tint = _Gui.QColor(_WM_COLOR)
+        tint.setAlpha(22)
+        letters = _Gui.QPen(col, max(0.7, W * 0.006))
+        letters.setJoinStyle(_Core.Qt.RoundJoin)
+        _outlined_text(painter, "ارتوپدی فنی", pt(0.488, 0.786), W * 0.74,
+                       letters, _Gui.QBrush(tint))
+        _outlined_text(painter, _SHEET_CLINIC_NAME, pt(0.515, 0.911),
+                       W * 0.64, letters, _Gui.QBrush(tint))
+    finally:
+        painter.restore()
+
+
+def _draw_vector(layout, painter, ctx, pw, ph, scale, total, printer,
+                 watermark=False):
+    # type: (Any, Any, Any, float, float, float, float, Any, bool) -> None
     """Vector pages for Qt's own engines (QPdfWriter / PdfFormat), which
     shape and embed Vazirmatn correctly.  CSS-space (96dpi) layout scaled
     to the device resolution; page model = clip + translate per page."""
@@ -473,14 +787,56 @@ def _draw_vector(layout, painter, ctx, pw, ph, scale, total, printer):
         ctx.clipRect = _Core.QRectF(0.0, 0.0, pw, ph)
         painter.save()
         painter.scale(scale, scale)
+        if watermark:
+            _paint_watermark(painter, pw, min(ph, total - y))
         painter.translate(0.0, -y)
         layout.draw(painter, ctx)
         painter.restore()
         y += ph
 
 
-def _raster_print(layout, ctx, printer, pw, ph, dev_w, dev_h, total):
-    # type: (Any, Any, Any, float, float, float, float, float) -> None
+def _render_pages(layout, ctx, pw, ph, total, watermark=False):
+    # type: (Any, Any, float, float, float, bool) -> list
+    """The document as a list of full-page 300dpi QImages (CSS space pw x ph)."""
+    s = float(_RASTER_DPI) / 96.0
+    pages = []
+    y = 0.0
+    while y < total:
+        if total - y < 2:
+            break
+        # ALWAYS a full-page canvas (rest stays white): a short last image
+        # scaled onto a full page rect would stretch the invoice.
+        img = _Gui.QImage(int(round(pw * s)), int(round(ph * s)),
+                          _Gui.QImage.Format_RGB32)
+        img.fill(_Gui.QColor("#ffffff"))
+        ip = _Gui.QPainter(img)
+        try:
+            ip.setRenderHint(_Gui.QPainter.Antialiasing, True)
+            ip.setRenderHint(_Gui.QPainter.TextAntialiasing, True)
+            ip.scale(s, s)
+            if watermark:
+                _paint_watermark(ip, pw, min(ph, total - y))
+            ctx.clip = _Core.QRectF(0.0, y, pw, ph)
+            ctx.clipRect = _Core.QRectF(0.0, 0.0, pw, ph)
+            ip.save()
+            ip.translate(0.0, -y)
+            layout.draw(ip, ctx)
+            ip.restore()
+        finally:
+            ip.end()
+        pages.append(img)
+        y += ph
+    if not pages:  # empty document: one blank page beats an aborted one
+        img = _Gui.QImage(int(round(pw * s)), int(round(ph * s)),
+                          _Gui.QImage.Format_RGB32)
+        img.fill(_Gui.QColor("#ffffff"))
+        pages.append(img)
+    return pages
+
+
+def _raster_print(layout, ctx, printer, pw, ph, dev_w, dev_h, total,
+                  watermark=False):
+    # type: (Any, Any, Any, float, float, float, float, float, bool) -> None
     """Physical printer drivers AND the preview engine receive each page as
     a 300dpi image.  Measured field bug: GDI cannot see fonts loaded via
     QFontDatabase.addApplicationFont, so printing the invoice to e.g.
@@ -499,37 +855,7 @@ def _raster_print(layout, ctx, printer, pw, ph, dev_w, dev_h, total):
         — so each page goes down as _RASTER_BANDS strip copies;
       * printer.newPage() between the pages while the painter is open.
     """
-    s = float(_RASTER_DPI) / 96.0
-    pages = []
-    y = 0.0
-    while y < total:
-        if total - y < 2:
-            break
-        # ALWAYS a full-page canvas (rest stays white): a short last image
-        # scaled onto a full page rect would stretch the invoice.
-        img = _Gui.QImage(int(round(pw * s)), int(round(ph * s)),
-                          _Gui.QImage.Format_RGB32)
-        img.fill(_Gui.QColor("#ffffff"))
-        ip = _Gui.QPainter(img)
-        try:
-            ip.setRenderHint(_Gui.QPainter.Antialiasing, True)
-            ip.setRenderHint(_Gui.QPainter.TextAntialiasing, True)
-            ip.scale(s, s)
-            ctx.clip = _Core.QRectF(0.0, y, pw, ph)
-            ctx.clipRect = _Core.QRectF(0.0, 0.0, pw, ph)
-            ip.save()
-            ip.translate(0.0, -y)
-            layout.draw(ip, ctx)
-            ip.restore()
-        finally:
-            ip.end()
-        pages.append(img)
-        y += ph
-    if not pages:  # empty document: one blank page beats an aborted one
-        img = _Gui.QImage(int(round(pw * s)), int(round(ph * s)),
-                          _Gui.QImage.Format_RGB32)
-        img.fill(_Gui.QColor("#ffffff"))
-        pages.append(img)
+    pages = _render_pages(layout, ctx, pw, ph, total, watermark)
     painter = _Gui.QPainter(printer)
     if not painter.isActive():
         painter.begin(printer)
@@ -559,8 +885,8 @@ def _raster_print(layout, ctx, printer, pw, ph, dev_w, dev_h, total):
         painter.end()
 
 
-def _doc_print(doc, printer):
-    # type: (Any, Any) -> None
+def _doc_print(doc, printer, watermark=False):
+    # type: (Any, Any, bool) -> None
     """Paginate doc across printer at the full content width.
 
     Everything is laid out once in a 96dpi CSS space (the printer page size
@@ -616,32 +942,35 @@ def _doc_print(doc, printer):
             # nesting a QImage QPainter inside a live GDI painter aborts
             # the page (measured EndPage failure).
             _raster_print(layout, ctx, printer, pw, ph, dev_w, dev_h,
-                          total)
+                          total, watermark)
             return
         painter = _Gui.QPainter(printer)
         if not painter.isActive():
             painter.begin(printer)
         try:
             _draw_vector(layout, painter, ctx, pw, ph, dpi / 96.0,
-                         total, printer)
+                         total, printer, watermark)
         finally:
             painter.end()
     except Exception:
         doc.print_(printer)
 
 
-def show_print_preview(parent, html):
-    # type: (Any, str) -> None
+def show_print_preview(parent, html, page=None):
+    # type: (Any, str, Optional[dict]) -> None
+    """``page``: None = A4 portrait (reports); invoice_page_opts() = the
+    landscape invoice sheet with its watermark."""
     doc = _make_doc(html)
     printer = _Print.QPrinter(_printer_mode())
     # Configure paper/orientation BEFORE the dialog is built, so its
-    # initial page geometry already reflects A4 portrait.
-    _setup_a4_portrait(printer)
+    # initial page geometry already reflects the chosen paper.
+    _setup_page(printer, page)
     preview = _Print.QPrintPreviewDialog(printer, parent)
+    watermark = bool(page and page.get("watermark"))
 
     def render_preview(p):
         # type: (_Print.QPrinter) -> None
-        _doc_print(doc, p)
+        _doc_print(doc, p, watermark)
 
     preview.paintRequested.connect(render_preview)
     preview.setWindowModality(_Core.Qt.ApplicationModal)
@@ -669,14 +998,14 @@ def _preview_size(parent):
         return _Core.QSize(1100, 800)
 
 
-def print_html_direct(parent, html):
-    # type: (Any, str) -> None
+def print_html_direct(parent, html, page=None):
+    # type: (Any, str, Optional[dict]) -> None
     doc = _make_doc(html)
     printer = _Print.QPrinter(_printer_mode())
-    _setup_a4_portrait(printer)
+    _setup_page(printer, page)
     dlg = _Print.QPrintDialog(printer, parent)
     if dlg.exec_() == _Widgets.QDialog.Accepted:
-        _doc_print(doc, printer)
+        _doc_print(doc, printer, bool(page and page.get("watermark")))
 
 
 def build_report_html(title, sections):

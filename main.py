@@ -6,7 +6,7 @@ import sys
 
 from app.database import init_db
 from app.utils import Qt, apply_app_font, best_persian_font, load_app_fonts, \
-    setup_scaling
+    setup_scaling, install_excepthook
 
 
 def main():
@@ -20,6 +20,7 @@ def main():
 
     app = Qt.QtWidgets.QApplication.instance() or Qt.QtWidgets.QApplication(sys.argv)
     app.setLayoutDirection(Qt.QtCore.Qt.RightToLeft)
+    install_excepthook()
     load_app_fonts()
     apply_app_font(size=10)
 

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from ..utils import Qt, confirm_msg, warning_msg
 from .. import settings as settings_mod
+from ..database import NO_DOCTOR_NAME
 from . import fields as F
 from ..theme import card, success
 
@@ -122,7 +123,7 @@ class DoctorsPage(_W.QWidget):
             return F.en(d.get("address") or "").lower()
         if col == 4:
             return int("".join(c for c in F.en(d.get("phone") or "")
-                               if c.isdigit()))
+                               if c.isdigit()) or 0)
         if col == 5:
             return int(d["is_active"])
         return 0
@@ -138,6 +139,9 @@ class DoctorsPage(_W.QWidget):
 
     # ------------------------------------------------------------------ #
     def refresh(self):
+        # Looked up once per refresh (read-only): get_no_doctor_id() used to
+        # run — and could INSERT — for every rendered row.
+        self._no_doc = settings_mod.find_doctor_id_by_name(NO_DOCTOR_NAME)
         self._all = settings_mod.list_doctors(active_only=False)
         self._total = len(self._all)
         self.pager.set_items(self._all, reset_page=False)
@@ -161,8 +165,8 @@ class DoctorsPage(_W.QWidget):
         h = _W.QHBoxLayout(btns)
         h.setContentsMargins(2, 0, 2, 0)
         h.setSpacing(4)
-        no_doc = settings_mod.get_no_doctor_id()
-        if d["id"] == no_doc or settings_mod.is_no_doctor(d["name"]):
+        if d["id"] == getattr(self, "_no_doc", None) or \
+                settings_mod.is_no_doctor(d["name"]):
             lbl = _W.QLabel("پیش‌فرض")
             lbl.setStyleSheet("color:#5d7385; font-weight:700;")
             h.addWidget(lbl)
@@ -182,6 +186,14 @@ class DoctorsPage(_W.QWidget):
                 b_deact.clicked.connect(
                     lambda _=False, pid=d["id"]: self._deactivate(pid))
                 h.addWidget(b_deact, 0, _Core.Qt.AlignVCenter)
+            else:
+                b_act = _W.QPushButton("فعال‌سازی")
+                b_act.setProperty("variant", "link")
+                b_act.setProperty("btnsize", "xs")
+                b_act.setCursor(_Core.Qt.PointingHandCursor)
+                b_act.clicked.connect(
+                    lambda _=False, pid=d["id"]: self._activate(pid))
+                h.addWidget(b_act, 0, _Core.Qt.AlignVCenter)
             b_del = _W.QPushButton("حذف")
             b_del.setProperty("variant", "link")
             b_del.setProperty("btnsize", "xs")
@@ -253,6 +265,10 @@ class DoctorsPage(_W.QWidget):
         if confirm_msg(self, "این پزشک غیرفعال شود؟"):
             settings_mod.deactivate_doctor(doctor_id)
             self.refresh()
+
+    def _activate(self, doctor_id):
+        settings_mod.activate_doctor(doctor_id)
+        self.refresh()
 
     def _delete(self, doctor_id):
         if settings_mod.is_doctor_used(doctor_id):

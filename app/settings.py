@@ -2,6 +2,7 @@
 """Settings + reference-data (doctors, payment methods) helpers."""
 from __future__ import annotations
 
+import sqlite3
 from typing import List, Optional
 
 from .database import NO_DOCTOR_NAME, get_connection
@@ -124,6 +125,9 @@ def find_doctor_id_by_name(name):
         conn.close()
 
 
+_DUP_DOCTOR = "پزشکی با این نام قبلاً ثبت شده است."
+
+
 def add_doctor(name, specialty="", address="", phone="", first_name="", last_name=""):
     # type: (str, str, str, str, str, str) -> int
     name = name.strip()
@@ -137,6 +141,8 @@ def add_doctor(name, specialty="", address="", phone="", first_name="", last_nam
             (name, first_name, last_name, specialty, address, phone))
         conn.commit()
         return int(cur.lastrowid)
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(_DUP_DOCTOR) from exc
     finally:
         conn.close()
 
@@ -165,6 +171,8 @@ def update_doctor(doctor_id, name, specialty="", address="", phone="",
             "specialty = ?, address = ?, phone = ? WHERE id = ?",
             (name, first_name, last_name, specialty, address, phone, doctor_id))
         conn.commit()
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(_DUP_DOCTOR) from exc
     finally:
         conn.close()
 
@@ -174,6 +182,16 @@ def deactivate_doctor(doctor_id):
     conn = get_connection()
     try:
         conn.execute("UPDATE doctors SET is_active = 0 WHERE id = ?", (doctor_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def activate_doctor(doctor_id):
+    # type: (int) -> None
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE doctors SET is_active = 1 WHERE id = ?", (doctor_id,))
         conn.commit()
     finally:
         conn.close()

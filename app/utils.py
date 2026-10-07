@@ -146,18 +146,35 @@ def load_app_fonts():
     if _FONTS_LOADED:
         return True
     _FONTS_LOADED = True
+    _add_font("app/resources/fonts/IranNastaliq.ttf")  # invoice letterhead
     for rel in ("app/resources/fonts/Vazirmatn.ttf",
                 "webapp/static/fonts/Vazirmatn-var.woff2"):
-        path = resource_path(rel)
-        if not os.path.exists(path):
-            continue
-        try:
-            ident = QtGui.QFontDatabase.addApplicationFont(path)
-        except Exception:
-            continue
-        if ident >= 0 and QtGui.QFontDatabase.applicationFontFamilies(ident):
+        if _add_font(rel):
             return True
     return False
+
+
+def _add_font(rel):
+    # type: (str) -> bool
+    path = resource_path(rel)
+    if not os.path.exists(path):
+        return False
+    try:
+        ident = QtGui.QFontDatabase.addApplicationFont(path)
+    except Exception:
+        return False
+    return bool(ident >= 0 and
+                QtGui.QFontDatabase.applicationFontFamilies(ident))
+
+
+def nastaliq_font():
+    # type: () -> str
+    """The bundled IranNastaliq (letterhead face); the body font if absent."""
+    if QtWidgets.QApplication.instance() is not None:
+        for have in QtGui.QFontDatabase().families():
+            if have.lower() == "irannastaliq":
+                return have
+    return best_persian_font()
 
 
 def best_persian_font():
@@ -186,6 +203,64 @@ def apply_app_font(size=10):
     # settings so both interfaces share the same rhythm.
     f.setPixelSize(14)
     app.setFont(f)
+
+
+_IN_HOOK = [False]
+
+
+def install_excepthook():
+    # type: () -> None
+    """Report unhandled errors instead of losing the app.
+
+    PyQt5 >= 5.5 calls qFatal() for an exception escaping a slot when the
+    default sys.excepthook is in place — the windowed exe (console=False)
+    then just vanishes. With this hook the traceback goes to errors.log
+    next to the database and the user gets a Persian message; the app
+    keeps running.
+    """
+    import sys
+    import traceback
+    import datetime as _dt
+
+    def hook(etype, value, tb):
+        if issubclass(etype, KeyboardInterrupt):
+            sys.__excepthook__(etype, value, tb)
+            return
+        text = "".join(traceback.format_exception(etype, value, tb))
+        log_path = ""
+        try:
+            from .database import _base_dir
+            log_path = os.path.join(_base_dir(), "errors.log")
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write("[%s]\n%s\n" % (
+                    _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), text))
+        except Exception:
+            pass
+        try:
+            sys.stderr.write(text)
+        except Exception:
+            pass
+        if _IN_HOOK[0] or QtWidgets.QApplication.instance() is None:
+            return
+        _IN_HOOK[0] = True
+        try:
+            box = QtWidgets.QMessageBox()
+            make_rtl(box)
+            box.setIcon(QtWidgets.QMessageBox.Critical)
+            box.setWindowTitle("خطا")
+            box.setText("یک خطای پیش‌بینی‌نشده رخ داد. کار شما ادامه دارد، "
+                        "ولی آخرین عملیات ممکن است انجام نشده باشد.")
+            if log_path:
+                box.setInformativeText("جزئیات در فایل errors.log کنار "
+                                       "برنامه ذخیره شد.")
+            box.setDetailedText(text)
+            box.exec_()
+        except Exception:
+            pass
+        finally:
+            _IN_HOOK[0] = False
+
+    sys.excepthook = hook
 
 
 def make_rtl(widget):

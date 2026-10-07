@@ -320,6 +320,7 @@ class SettingsPage(_W.QWidget):
         if path is None:
             error_msg(self, "پشتیبان‌گیری ناموفق بود؛ پایگاه داده در دسترس نیست")
             return
+        database._prune_backups()
         info_msg(self, "پشتیبان جدید ساخته شد")
         self._reload_backups()
 
@@ -340,14 +341,24 @@ class SettingsPage(_W.QWidget):
                                  "نسخه امنی از وضعیت فعلی پیش از بازیابی "
                                  "ساخته می‌شود."):
             return
-        database._backup_db()
+        problem = database.validate_backup(path)
+        if problem:
+            error_msg(self, problem)
+            return
+        if database._backup_db() is None:
+            error_msg(self, "تهیه نسخه امن از وضعیت فعلی ممکن نشد؛ "
+                            "بازیابی انجام نشد.")
+            return
         try:
             shutil.copy2(path, database._db_path())
-        except OSError:
-            error_msg(self, "بازیابی ممکن نشد")
+            # An older backup may lack columns added since — bring it to the
+            # current schema now instead of failing until the next start.
+            database.migrate_db()
+        except Exception as exc:
+            error_msg(self, "بازیابی ممکن نشد: %s" % exc)
             return
         info_msg(self, "اطلاعات از پشتیبان بازیابی شد")
-        self._reload_backups()
+        self.refresh()
 
     def _delete_b(self, path):
         if not confirm_msg(self, "این پشتیبان حذف شود؟"):
