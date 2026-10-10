@@ -111,11 +111,8 @@ class SettingsPage(_W.QWidget):
         self.title_edit = _W.QLineEdit()
         self.title_edit.setMinimumWidth(220)
         grid.addWidget(self.title_edit, 0, 1)
-        grid.addWidget(_W.QLabel("اندازه چاپ"), 0, 2)
-        self.size_combo = _W.QComboBox()
-        self.size_combo.addItems(["A4", "A5"])
-        F.style_combo(self.size_combo)
-        grid.addWidget(self.size_combo, 0, 3)
+        # No paper-size choice: the invoice sheet always prints on A5
+        # landscape (fitted to the page), reports on A4 portrait.
         gv.addLayout(grid)
         self.chk_update_date = _W.QCheckBox(
             "به‌روزرسانی تاریخ صدور هنگام ویرایش فاکتور")
@@ -183,8 +180,6 @@ class SettingsPage(_W.QWidget):
     def refresh(self):
         self.title_edit.setText(settings_mod.get_setting(
             "app_title", "آذران طب") or "")
-        self.size_combo.setCurrentText(
-            settings_mod.get_setting("print_size", "A4") or "A4")
         self.chk_update_date.setChecked(settings_mod.get_setting(
             "update_invoice_date_on_edit", "0") == "1")
         self.chk_show_doctor.setChecked(settings_mod.get_setting(
@@ -206,7 +201,6 @@ class SettingsPage(_W.QWidget):
         settings_mod.set_setting(
             "show_doctor_in_print",
             "1" if self.chk_show_doctor.isChecked() else "0")
-        settings_mod.set_setting("print_size", self.size_combo.currentText())
         self.window_.refresh_brand()
         info_msg(self, "تنظیمات ذخیره شد")
 

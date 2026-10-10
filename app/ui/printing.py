@@ -2,7 +2,7 @@
 """HTML invoice/report printing helpers using QTextDocument (v2 UI).
 
 Reports print A4 portrait. Invoices print as the clinic's «برگه فاکتور
-بیمار» sheet: landscape on the paper chosen in settings, Nastaliq letterhead,
+بیمار» sheet: A5 landscape, fitted to exactly one page, Nastaliq letterhead,
 faint hollow lettering behind, doctor name per the settings toggle.
 """
 from __future__ import annotations
@@ -119,29 +119,22 @@ _SHEET_RED = "#c0392b"
 # Lilac (بنفش یاسی) of the pad's letterhead and background emblem.
 _LILAC = "#9a6bbf"
 
-# Paper -> text zoom. The sheet is designed at A5-landscape width (zoom 1.0);
-# A4 landscape is ~1.45x wider, so type grows (1.2x) instead of leaving the
-# form tiny in a corner.
-_PAPER_ZOOM = {"A5": 1.0, "A4": 1.2}
+def invoice_page_opts(builder=None):
+    # type: (Any) -> dict
+    """Page setup for the invoice sheet: A5 landscape, watermark on.
+
+    ``builder(zoom, fill_px) -> html`` lets the printer fit the sheet to
+    the page it actually prints on (see _fit_doc): the form then fills the
+    A5 page exactly, and many item rows shrink it instead of spilling onto
+    a second sheet. Pass to show_print_preview / print_html_direct."""
+    opts = {"paper": "A5", "landscape": True, "watermark": True}
+    if builder is not None:
+        opts["builder"] = builder
+    return opts
 
 
-def _paper_from_settings():
-    # type: () -> str
-    from .. import settings as settings_mod
-    paper = (settings_mod.get_setting("print_size", "A4") or "A4").upper()
-    return paper if paper in _PAPER_ZOOM else "A4"
-
-
-def invoice_page_opts():
-    # type: () -> dict
-    """Page setup for the invoice sheet: landscape, paper from «اندازه چاپ»,
-    watermark on. Pass to show_print_preview / print_html_direct."""
-    return {"paper": _paper_from_settings(), "landscape": True,
-            "watermark": True}
-
-
-def _invoice_sheet(data, zoom=None):
-    # type: (dict, Optional[float]) -> str
+def _invoice_sheet(data, zoom=None, fill=0):
+    # type: (dict, Optional[float], int) -> str
     """Invoice print HTML. ``data`` keys: invoice_no, issued_iso, time (str,
     may be empty), file_no, patient_name, doctor_name (empty = blank cell),
     total, paid, remaining, rows (title/quantity/unit_price/row_total), notes.
@@ -149,9 +142,10 @@ def _invoice_sheet(data, zoom=None):
     Qt5 rich text lays table columns out left-to-right whatever `dir` says,
     so every horizontal structure is emitted in REVERSED source order (see
     the notes above _doc_style). Widths are percentages, so the same markup
-    fills any paper the printer reports.
+    fills any paper the printer reports. ``fill`` adds that many px of
+    blank item area so the form reaches the bottom of the page.
     """
-    z = float(zoom if zoom is not None else _PAPER_ZOOM[_paper_from_settings()])
+    z = float(zoom if zoom is not None else 1.0)
     font = _print_font()
 
     def fs(n):
@@ -267,7 +261,7 @@ def _invoice_sheet(data, zoom=None):
         "<table dir='rtl' width='100%' cellspacing='0' cellpadding='0' "
         f"border='1' style='border-style:solid;border-color:{_SHEET_LINE};'>"
         "<tr><td dir='rtl' style='padding:0px;border-style:none;'>"
-        + head + grid + items_html + notes_html + foot
+        + head + grid + items_html + notes_html + _spacer(fill) + foot
         + "</td></tr></table></body></html>")
 
 
@@ -381,13 +375,35 @@ def _letterhead_img(zoom):
             % (_LH_SCHEME, zoom, cw, ch))
 
 
+_SPACER_URL = "azaran-spacer:1"
+_SPACER = []  # lazily created 1x1 transparent QImage
+
+
+def _spacer(fill):
+    # type: (int) -> str
+    """Exact-height blank block (a transparent image: rich-text block heights
+    are otherwise only approximately controllable)."""
+    fill = int(fill)
+    if fill <= 0:
+        return ""
+    return ("<table dir='rtl' width='100%' cellspacing='0' cellpadding='0'>"
+            "<tr><td style='padding:0px;'><img src='" + _SPACER_URL +
+            "' width='1' height='%d'/></td></tr></table>" % fill)
+
+
 def attach_resources(doc):
     # type: (Any) -> None
-    """Register the letterhead images on a QTextDocument (print documents
-    and the QTextEdit preview) before its HTML is set."""
+    """Register the letterhead images (and the spacer) on a QTextDocument —
+    print documents and the QTextEdit preview — before its HTML is set."""
     for key, (img, _w, _h) in list(_LH_CACHE.items()):
         doc.addResource(_Gui.QTextDocument.ImageResource,
                         _Core.QUrl("%s:%s" % (_LH_SCHEME, key)), img)
+    if not _SPACER:
+        img = _Gui.QImage(1, 1, _Gui.QImage.Format_ARGB32_Premultiplied)
+        img.fill(_Core.Qt.transparent)
+        _SPACER.append(img)
+    doc.addResource(_Gui.QTextDocument.ImageResource,
+                    _Core.QUrl(_SPACER_URL), _SPACER[0])
 
 
 def _issue_time(issued_at):
@@ -403,8 +419,8 @@ def _issue_time(issued_at):
     return ""
 
 
-def build_invoice_html(invoice, zoom=None):
-    # type: (dict, Optional[float]) -> str
+def build_invoice_html(invoice, zoom=None, fill=0):
+    # type: (dict, Optional[float], int) -> str
     """invoice dict keys: invoice_no, issued_at (ISO), patient_name, file_no,
     doctor_name, show_doctor (bool), notes (optional), rows (title,
     unit_price, quantity, row_total), total, paid, remaining."""
@@ -421,11 +437,11 @@ def build_invoice_html(invoice, zoom=None):
         "total": int(invoice.get("total", 0)),
         "paid": int(invoice.get("paid", 0)),
         "remaining": int(invoice.get("remaining", 0)),
-    }, zoom)
+    }, zoom, fill)
 
 
-def build_proforma_html(data, zoom=None):
-    # type: (dict, Optional[float]) -> str
+def build_proforma_html(data, zoom=None, fill=0):
+    # type: (dict, Optional[float], int) -> str
     """Unsaved invoice preview. Keys: invoice_no, issued_iso, patient_name,
     file_no, doctor_name, show_doctor, notes, rows, total, paid."""
     total = int(data.get("total", 0))
@@ -440,14 +456,20 @@ def build_proforma_html(data, zoom=None):
         "notes": data.get("notes", ""),
         "rows": data.get("rows", []),
         "total": total, "paid": paid, "remaining": total - paid,
-    }, zoom)
+    }, zoom, fill)
 
 
-def build_saved_invoice_html(invoice_id, zoom=None):
-    # type: (int, Optional[float]) -> Optional[str]
+def build_saved_invoice_html(invoice_id, zoom=None, fill=0):
+    # type: (int, Optional[float], int) -> Optional[str]
     """Print HTML for a persisted invoice — the single builder behind the
     archive's «مشاهده / چاپ» and the post-save print preview. The doctor's
     name appears only when «نمایش نام پزشک در چاپ» is on in the settings."""
+    data = _saved_invoice_data(invoice_id)
+    return build_invoice_html(data, zoom, fill) if data else None
+
+
+def _saved_invoice_data(invoice_id):
+    # type: (int) -> Optional[dict]
     from .. import models, settings as settings_mod
     from ..database import NO_DOCTOR_NAME
     inv = models.get_invoice(invoice_id)
@@ -460,7 +482,7 @@ def build_saved_invoice_html(invoice_id, zoom=None):
     doctor = (inv.get("doctor_name") or "").strip()
     if doctor == NO_DOCTOR_NAME:
         doctor = ""
-    return build_invoice_html({
+    return {
         "invoice_no": inv["invoice_no"],
         "issued_at": inv["issued_at"],
         "patient_name": "%s %s" % (inv["first_name"], inv["last_name"]),
@@ -474,17 +496,19 @@ def build_saved_invoice_html(invoice_id, zoom=None):
         "total": int(inv["total_amount"]),
         "paid": paid,
         "remaining": int(inv["total_amount"]) - paid,
-    }, zoom)
+    }
 
 
 def show_invoice_preview(parent, invoice_id):
     # type: (Any, int) -> bool
     """Open the print preview for a saved invoice. Whether the doctor's name
     is printed is decided by the settings page — no per-print question."""
-    html = build_saved_invoice_html(invoice_id)
-    if not html:
+    data = _saved_invoice_data(invoice_id)
+    if not data:
         return False
-    show_print_preview(parent, html, page=invoice_page_opts())
+    show_print_preview(
+        parent, build_invoice_html(data),
+        page=invoice_page_opts(lambda z, f: build_invoice_html(data, z, f)))
     return True
 
 
@@ -552,7 +576,10 @@ def _setup_page(printer, page):
     except Exception:
         pass
     try:
-        printer.setPageMargins(8, 8, 8, 8, qps.Millimeter)
+        # 5 mm: about the hardware minimum of common printers, so the
+        # form covers the sheet. A driver that needs more simply reports a
+        # smaller printable area, and _fit_doc sizes the form to that.
+        printer.setPageMargins(5, 5, 5, 5, qps.Millimeter)
     except Exception:
         pass
 
@@ -956,11 +983,61 @@ def _doc_print(doc, printer, watermark=False):
         doc.print_(printer)
 
 
-def show_print_preview(parent, html, page=None):
-    # type: (Any, str, Optional[dict]) -> None
-    """``page``: None = A4 portrait (reports); invoice_page_opts() = the
-    landscape invoice sheet with its watermark."""
+def _page_css_size(printer):
+    # type: (Any) -> tuple
+    dpi = float(printer.logicalDpiX()) or 96.0
+    return (float(printer.width()) * 96.0 / dpi,
+            float(printer.height()) * 96.0 / dpi)
+
+
+def _measure(html, pw):
+    # type: (str, float) -> tuple
     doc = _make_doc(html)
+    doc.setTextWidth(pw)
+    return doc, float(doc.documentLayout().documentSize().height())
+
+
+def _fit_doc(builder, printer):
+    # type: (Any, Any) -> Any
+    """Exactly one page: the form's frame runs from the top to the bottom
+    of the printable area of ``printer``.
+
+    Too tall (many rows / long notes): the whole sheet is scaled down via
+    its zoom until it fits. Too short: blank item area is added (an exact
+    spacer) until the bottom rule meets the bottom of the page."""
+    pw, ph = _page_css_size(printer)
+    if pw <= 100 or ph <= 100:
+        return _make_doc(builder(1.0, 0))
+    limit = ph - 1.0
+    z = 1.0
+    doc, h = _measure(builder(z, 0), pw)
+    tries = 0
+    while h > limit and z > 0.45 and tries < 12:
+        z = max(0.45, round(z * (limit / h) * 0.99, 2))
+        doc, h = _measure(builder(z, 0), pw)
+        tries += 1
+    fill = int(limit - h)
+    for _ in range(4):
+        if fill < 2:
+            break
+        d2, h2 = _measure(builder(z, fill), pw)
+        if h2 <= limit:
+            doc, h = d2, h2
+            gap = int(limit - h2)
+            if gap < 2:
+                break
+            fill += gap
+        else:
+            fill -= int(h2 - limit) + 1
+    return doc
+
+
+def show_print_preview(parent, html, page=None):
+    # type: (Any, Optional[str], Optional[dict]) -> None
+    """``page``: None = A4 portrait (reports); invoice_page_opts(builder) =
+    the A5-landscape invoice sheet, fitted to the page, with its watermark."""
+    builder = page.get("builder") if page else None
+    doc = None if builder is not None else _make_doc(html)
     printer = _Print.QPrinter(_printer_mode())
     # Configure paper/orientation BEFORE the dialog is built, so its
     # initial page geometry already reflects the chosen paper.
@@ -970,7 +1047,10 @@ def show_print_preview(parent, html, page=None):
 
     def render_preview(p):
         # type: (_Print.QPrinter) -> None
-        _doc_print(doc, p, watermark)
+        # Re-fit on every paint: the page setup inside the preview dialog
+        # can change paper or margins.
+        _doc_print(_fit_doc(builder, p) if builder is not None else doc,
+                   p, watermark)
 
     preview.paintRequested.connect(render_preview)
     preview.setWindowModality(_Core.Qt.ApplicationModal)
@@ -999,12 +1079,14 @@ def _preview_size(parent):
 
 
 def print_html_direct(parent, html, page=None):
-    # type: (Any, str, Optional[dict]) -> None
-    doc = _make_doc(html)
+    # type: (Any, Optional[str], Optional[dict]) -> None
+    builder = page.get("builder") if page else None
     printer = _Print.QPrinter(_printer_mode())
     _setup_page(printer, page)
     dlg = _Print.QPrintDialog(printer, parent)
     if dlg.exec_() == _Widgets.QDialog.Accepted:
+        doc = _fit_doc(builder, printer) if builder is not None \
+            else _make_doc(html)
         _doc_print(doc, printer, bool(page and page.get("watermark")))
 
 

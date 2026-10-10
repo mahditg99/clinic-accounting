@@ -836,7 +836,8 @@ class InvoicePage(_W.QWidget):
         b_print.clicked.connect(
             lambda: printing.show_print_preview(
                 dlg, printing.build_proforma_html(data),
-                page=printing.invoice_page_opts()))
+                page=printing.invoice_page_opts(
+                    lambda z, f: printing.build_proforma_html(data, z, f))))
         b_close.clicked.connect(dlg.accept)
         row.addWidget(b_print)
         row.addWidget(b_close)
