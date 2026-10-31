@@ -224,17 +224,7 @@ class ItemRow(_W.QWidget):
         # capped and typing filters it by substring (F.SearchComboBox).
         self.prod = F.SearchComboBox(placeholder="انتخاب کالا …")
         self.prod.setMinimumWidth(200)
-        self._by_id = {}
-        self.prod.addItem("")  # index 0: nothing chosen yet
-        for p in self.products:
-            title = p["title"] or "کالای بدون نام"
-            self._by_id[int(p["id"])] = p
-            tip = "%s  |  قیمت %s  |  موجودی %s" % (
-                title, money_utils.format_money_persian(p["sale_price"]),
-                F.fa(p["stock"]))
-            self.prod.addItem(title, _Core.QVariant(int(p["id"])))
-            self.prod.setItemData(self.prod.count() - 1, _Core.QVariant(tip),
-                                  _Core.Qt.ToolTipRole)
+        self._fill_products()
         self.prod.activated.connect(self._on_pick)
         # Also sync on programmatic/typed selection (Enter after typing an
         # exact title lands via currentIndexChanged, not activated).
@@ -270,6 +260,40 @@ class ItemRow(_W.QWidget):
         outer.addWidget(self.stock_lbl)
         self.qty.textChanged.connect(self._recompute)
         self.unit.textChanged.connect(self._recompute)
+
+    def _fill_products(self):
+        self._by_id = {}
+        self.prod.clear()
+        self.prod.addItem("")  # index 0: nothing chosen yet
+        for p in self.products:
+            title = p["title"] or "کالای بدون نام"
+            self._by_id[int(p["id"])] = p
+            tip = "%s  |  قیمت %s  |  موجودی %s" % (
+                title, money_utils.format_money_persian(p["sale_price"]),
+                F.fa(p["stock"]))
+            self.prod.addItem(title, _Core.QVariant(int(p["id"])))
+            self.prod.setItemData(self.prod.count() - 1, _Core.QVariant(tip),
+                                  _Core.Qt.ToolTipRole)
+
+    def reload_products(self, products):
+        """Swap in a fresh catalog (a product added after this row was
+        opened must still be pickable) without touching the current pick,
+        its typed price or quantity."""
+        cur = self.product
+        products = list(products)
+        if cur is not None and all(p["id"] != cur["id"] for p in products):
+            products.append(cur)  # e.g. its batch just sold out: keep it
+        self.products = products
+        self.prod.blockSignals(True)
+        try:
+            self._fill_products()
+            idx = 0
+            if cur is not None:
+                idx = max(self.prod.findData(_Core.QVariant(int(cur["id"]))), 0)
+            self.prod.setCurrentIndex(idx)
+            self.prod.lineEdit().setText(self.prod.itemText(idx))
+        finally:
+            self.prod.blockSignals(False)
 
     def _on_pick(self, index):
         """User chose from the (possibly filtered) dropdown."""
@@ -497,6 +521,8 @@ class InvoicePage(_W.QWidget):
     def refresh(self):
         """Reload pickers; never clobber an in-progress form."""
         self._reload_doctors()
+        for r in self._item_rows:
+            r.reload_products(self._products())
 
     def _reload_doctors(self):
         cur = self.doctor.currentData()

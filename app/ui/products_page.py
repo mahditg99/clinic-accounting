@@ -299,6 +299,12 @@ class ProductsPage(_W.QWidget):
     def _save(self):
         try:
             if self._editing_id is None:
+                # A zero-stock product is saved inactive and never shows in
+                # the invoice picker, so refuse it here instead of silently.
+                if self.stock.value() <= 0:
+                    self.err.setText("موجودی باید بیشتر از صفر باشد؛ "
+                                     "محصول بدون موجودی در فاکتور نمی‌آید.")
+                    return
                 models.add_product(
                     self.title.text(), self.purchase.value(), self.sale.value(),
                     self.stock.value(), self.low.value(), self.desc.text().strip())
