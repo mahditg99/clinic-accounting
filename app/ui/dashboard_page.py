@@ -211,9 +211,7 @@ class DashboardPage(_W.QWidget):
         self.method_empty.setVisible(not rows)
 
         patients = [p for p in models.list_patients() if p["is_active"]]
-        products = models.list_products(active_only=True)
-        low = [p for p in products
-               if int(p["stock"]) <= int(p["low_stock_warning"] or 0)]
+        low = _stock_alerts(models.list_products(active_only=False))
         archive = models.list_archive_invoices(date_from=today, date_to=today)
         conn = database.get_connection()
         try:
@@ -258,3 +256,29 @@ class DashboardPage(_W.QWidget):
 
 def _cell(text):
     return F.make_item(text)
+
+
+def _stock_alerts(products):
+    """Rows for «رو به اتمام یا بدون موجودی».
+
+    A batch that reaches zero stock is auto-deactivated, so reading only
+    active products could never show «بدون موجودی». Batches are grouped by
+    title instead: a title is out of stock when none of its batches has
+    stock left (shown once, newest batch), and low when an active batch is
+    at or under its warning level. Batches the user deactivated by hand
+    while they still had stock are left out."""
+    by_title = {}
+    for p in products:
+        key = F.en(p["title"] or "").strip()
+        by_title.setdefault(key, []).append(p)
+    out = []
+    for batches in by_title.values():
+        if all(int(b["stock"]) <= 0 for b in batches):
+            out.append(max(batches, key=lambda b: int(b["id"])))
+            continue
+        for b in batches:
+            if b["is_active"] and 0 < int(b["stock"]) <= \
+                    int(b["low_stock_warning"] or 0):
+                out.append(b)
+    out.sort(key=lambda b: (int(b["stock"]), F.en(b["title"] or "")))
+    return out

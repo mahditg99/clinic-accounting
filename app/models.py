@@ -24,6 +24,20 @@ def _search_word(word):
     return folded.replace("\u200c", "%")
 
 
+def _day(value):
+    # type: (Optional[str]) -> Optional[str]
+    """Normalize a range bound to a bare 'YYYY-MM-DD' (or None).
+
+    Callers sometimes pass full timestamps (date_utils.jalali_month_range_iso
+    returns 'YYYY-MM-DD 00:00:00'); the queries below compare 10-character
+    dates and append ' 23:59:59' to the upper bound themselves, so a
+    timestamped lower bound silently dropped the whole first day.
+    """
+    if not value:
+        return None
+    return str(value).strip()[:10] or None
+
+
 # --------------------------------------------------------------------------- #
 # Patients
 # --------------------------------------------------------------------------- #
@@ -128,6 +142,16 @@ def deactivate_patient(patient_id):
     conn = _conn()
     try:
         conn.execute("UPDATE patients SET is_active = 0 WHERE id = ?", (patient_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def activate_patient(patient_id):
+    # type: (int) -> None
+    conn = _conn()
+    try:
+        conn.execute("UPDATE patients SET is_active = 1 WHERE id = ?", (patient_id,))
         conn.commit()
     finally:
         conn.close()
@@ -270,7 +294,7 @@ def add_product(title, purchase_price, sale_price, stock, low_stock_warning,
     purchase_price = _validate_money(purchase_price, "قیمت خرید")
     sale_price = _validate_money(sale_price, "قیمت فروش")
     stock = _validate_money(stock, "موجودی")
-    low_stock_warning = _validate_money(low_stock_warning, "حداکم موجودی")
+    low_stock_warning = _validate_money(low_stock_warning, "سطح هشدار")
     is_active = 1 if stock > 0 else 0
     conn = _conn()
     try:
@@ -296,7 +320,7 @@ def update_product(product_id, title, purchase_price, sale_price, stock,
     purchase_price = _validate_money(purchase_price, "قیمت خرید")
     sale_price = _validate_money(sale_price, "قیمت فروش")
     stock = _validate_money(stock, "موجودی")
-    low_stock_warning = _validate_money(low_stock_warning, "حداکم موجودی")
+    low_stock_warning = _validate_money(low_stock_warning, "سطح هشدار")
     is_active = 1 if stock > 0 else 0
     conn = _conn()
     try:
@@ -634,12 +658,16 @@ def soft_delete_invoice(invoice_id):
     # type: (int) -> None
     conn = _conn()
     try:
-        # Restore stock for all items before soft-deleting.
-        items = list_invoice_items(invoice_id)
-        for it in items:
-            if it.get("product_id") is not None:
-                _apply_stock_delta(conn, it["product_id"], +int(it["quantity"]))
-        conn.execute("UPDATE invoices SET is_deleted = 1 WHERE id = ?", (invoice_id,))
+        # Flip the flag first and only restore stock when this call actually
+        # voided the invoice — a second click (or an already-void invoice)
+        # must not hand the items back to stock twice.
+        cur = conn.execute("UPDATE invoices SET is_deleted = 1 "
+                           "WHERE id = ? AND is_deleted = 0", (invoice_id,))
+        if cur.rowcount:
+            for it in list_invoice_items(invoice_id):
+                if it.get("product_id") is not None:
+                    _apply_stock_delta(conn, it["product_id"],
+                                       +int(it["quantity"]))
         conn.commit()
     finally:
         conn.close()
@@ -693,6 +721,7 @@ def _archive_where(doctor_filter, date_from, date_to, search_text):
     # type: (Any, Optional[str], Optional[str], str) -> Tuple[str, List[Any]]
     """Shared WHERE builder for the archive list + count queries so a page
     and its total always agree on the same filter."""
+    date_from, date_to = _day(date_from), _day(date_to)
     sql = "WHERE i.is_deleted = 0 "
     params = []
     if doctor_filter == "none":
@@ -805,6 +834,7 @@ def daily_report(date_iso):
     detail: list of {'method','paid_at','amount','invoice_no','file_no','patient_name'}.
     Only payments of non-deleted invoices on the given Gregorian date.
     """
+    date_iso = _day(date_iso) or ""
     sql = (
         "SELECT pm.method, pm.paid_at, pm.amount, i.id AS invoice_id, "
         "i.invoice_no, p.file_no, p.first_name, p.last_name "
@@ -857,6 +887,7 @@ def income_expense_report(date_from=None, date_to=None):
     بستانکار = total remaining (total_amount - paid) of non-deleted invoices
              whose issued_at <= date_to (or all if no date_to).
     """
+    date_from, date_to = _day(date_from), _day(date_to)
     conn = _conn()
     try:
         income = 0
@@ -979,6 +1010,7 @@ def delete_expense(expense_id):
 
 def list_expenses(date_from=None, date_to=None, category=None):
     # type: (Optional[str], Optional[str], Optional[str]) -> List[Dict[str, Any]]
+    date_from, date_to = _day(date_from), _day(date_to)
     conn = _conn()
     try:
         sql = ("SELECT id, expense_date, amount, description, category "
@@ -1012,6 +1044,7 @@ def doctor_referral_report(doctor_id_or_none, date_from=None, date_to=None):
     Columns: file_no, patient_name, invoice_count, total_sum, paid_sum,
              remaining, last_invoice_date (ISO).
     """
+    date_from, date_to = _day(date_from), _day(date_to)
     conn = _conn()
     try:
         # Shared WHERE clause builder (text order = params order).
@@ -1086,6 +1119,7 @@ def receipts_report(start_date, end_date):
                                   'invoice_no','patient_name','patient_file_no'}
     Only payments of non-deleted invoices in the Gregorian-ISO date range.
     """
+    start_date, end_date = _day(start_date), _day(end_date)
     conn = _conn()
     try:
         sql = (
@@ -1143,6 +1177,7 @@ def expenses_report(start_date, end_date):
         expense_details: list of {'id','expense_date','amount','description',
                                   'category'}
     """
+    start_date, end_date = _day(start_date), _day(end_date)
     conn = _conn()
     try:
         sql = ("SELECT id, expense_date, amount, description, category "
@@ -1199,6 +1234,7 @@ def sales_profit_report(start_date, end_date):
         summary_by_product: list of {'product','quantity','row_total',
                                      'row_cost','profit'}
     """
+    start_date, end_date = _day(start_date), _day(end_date)
     conn = _conn()
     try:
         # ---- Invoices / sales in range (non-deleted).
@@ -1329,6 +1365,7 @@ def product_sales_report(start_date=None, end_date=None):
         total_profit: int
         invoice_count: int
     """
+    start_date, end_date = _day(start_date), _day(end_date)
     conn = _conn()
     try:
         sql = (
@@ -1409,6 +1446,7 @@ def doctor_report(doctor_id, start_date, end_date):
              'patient_file_no','doctor_name','product_title','quantity',
              'unit_price','cost_price','row_total','row_cost','row_profit'}
     """
+    start_date, end_date = _day(start_date), _day(end_date)
     conn = _conn()
     try:
         doctor_name = doctor_name_for(doctor_id)

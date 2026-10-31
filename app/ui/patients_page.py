@@ -131,7 +131,10 @@ class PatientsPage(_W.QWidget):
         if col == 2:
             return F.en(p["last_name"] or "").lower()
         if col == 3:
-            return int("".join(c for c in F.en(p["phone"] or "") if c.isdigit()))
+            # `or 0`: one empty phone used to raise and silently cancel
+            # the whole sort.
+            return int("".join(c for c in F.en(p["phone"] or "")
+                               if c.isdigit()) or 0)
         if col == 4:
             return _GENDER_TO_FA.get(p["gender"], "")
         if col == 5:
@@ -216,6 +219,13 @@ class PatientsPage(_W.QWidget):
             b_deact.setCursor(_Core.Qt.PointingHandCursor)
             b_deact.clicked.connect(lambda _=False, pid=pid: self._deactivate(pid))
             h.addWidget(b_deact, 0, _Core.Qt.AlignVCenter)
+        else:
+            b_act = _W.QPushButton("فعال‌سازی")
+            b_act.setProperty("variant", "link")
+            b_act.setProperty("btnsize", "xs")
+            b_act.setCursor(_Core.Qt.PointingHandCursor)
+            b_act.clicked.connect(lambda _=False, pid=pid: self._activate(pid))
+            h.addWidget(b_act, 0, _Core.Qt.AlignVCenter)
         if not int(p["invoice_count"]):
             b_del = _W.QPushButton("حذف")
             b_del.setProperty("variant", "link")
@@ -290,6 +300,10 @@ class PatientsPage(_W.QWidget):
         if confirm_msg(self, "پرونده این بیمار غیرفعال شود؟"):
             models.deactivate_patient(patient_id)
             self.refresh()
+
+    def _activate(self, patient_id):
+        models.activate_patient(patient_id)
+        self.refresh()
 
     def _delete(self, patient_id):
         if models.patient_has_invoices(patient_id):

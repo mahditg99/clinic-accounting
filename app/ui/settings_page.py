@@ -111,11 +111,8 @@ class SettingsPage(_W.QWidget):
         self.title_edit = _W.QLineEdit()
         self.title_edit.setMinimumWidth(220)
         grid.addWidget(self.title_edit, 0, 1)
-        grid.addWidget(_W.QLabel("اندازه چاپ"), 0, 2)
-        self.size_combo = _W.QComboBox()
-        self.size_combo.addItems(["A4", "A5"])
-        F.style_combo(self.size_combo)
-        grid.addWidget(self.size_combo, 0, 3)
+        # No paper-size choice: the invoice sheet always prints on A5
+        # landscape (fitted to the page), reports on A4 portrait.
         gv.addLayout(grid)
         self.chk_update_date = _W.QCheckBox(
             "به‌روزرسانی تاریخ صدور هنگام ویرایش فاکتور")
@@ -183,8 +180,6 @@ class SettingsPage(_W.QWidget):
     def refresh(self):
         self.title_edit.setText(settings_mod.get_setting(
             "app_title", "آذران طب") or "")
-        self.size_combo.setCurrentText(
-            settings_mod.get_setting("print_size", "A4") or "A4")
         self.chk_update_date.setChecked(settings_mod.get_setting(
             "update_invoice_date_on_edit", "0") == "1")
         self.chk_show_doctor.setChecked(settings_mod.get_setting(
@@ -206,7 +201,6 @@ class SettingsPage(_W.QWidget):
         settings_mod.set_setting(
             "show_doctor_in_print",
             "1" if self.chk_show_doctor.isChecked() else "0")
-        settings_mod.set_setting("print_size", self.size_combo.currentText())
         self.window_.refresh_brand()
         info_msg(self, "تنظیمات ذخیره شد")
 
@@ -320,6 +314,7 @@ class SettingsPage(_W.QWidget):
         if path is None:
             error_msg(self, "پشتیبان‌گیری ناموفق بود؛ پایگاه داده در دسترس نیست")
             return
+        database._prune_backups()
         info_msg(self, "پشتیبان جدید ساخته شد")
         self._reload_backups()
 
@@ -340,14 +335,24 @@ class SettingsPage(_W.QWidget):
                                  "نسخه امنی از وضعیت فعلی پیش از بازیابی "
                                  "ساخته می‌شود."):
             return
-        database._backup_db()
+        problem = database.validate_backup(path)
+        if problem:
+            error_msg(self, problem)
+            return
+        if database._backup_db() is None:
+            error_msg(self, "تهیه نسخه امن از وضعیت فعلی ممکن نشد؛ "
+                            "بازیابی انجام نشد.")
+            return
         try:
             shutil.copy2(path, database._db_path())
-        except OSError:
-            error_msg(self, "بازیابی ممکن نشد")
+            # An older backup may lack columns added since — bring it to the
+            # current schema now instead of failing until the next start.
+            database.migrate_db()
+        except Exception as exc:
+            error_msg(self, "بازیابی ممکن نشد: %s" % exc)
             return
         info_msg(self, "اطلاعات از پشتیبان بازیابی شد")
-        self._reload_backups()
+        self.refresh()
 
     def _delete_b(self, path):
         if not confirm_msg(self, "این پشتیبان حذف شود؟"):

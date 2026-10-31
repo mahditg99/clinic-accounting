@@ -278,15 +278,22 @@ class LoginDialog(_W.QDialog):
 
 
 class ChangePasswordDialog(_W.QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, forced=False):
         super().__init__(parent)
         self.setLayoutDirection(_Core.Qt.RightToLeft)
-        self.setWindowTitle("تغییر رمز")
+        self.setWindowTitle("تغییر رمز پیش‌فرض" if forced else "تغییر رمز")
         self.setFixedWidth(380)
         from ..theme import card, primary
         box = _W.QWidget()
         v = _W.QVBoxLayout(box)
         v.setSpacing(8)
+        if forced:
+            note = _W.QLabel("رمز عبور هنوز همان رمز پیش‌فرض (admin) است. "
+                             "برای حفاظت از اطلاعات بیماران، پیش از ورود "
+                             "یک رمز تازه انتخاب کنید.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color:#b06a00; font-weight:600;")
+            v.addWidget(note)
         v.addWidget(_W.QLabel("رمز فعلی:"))
         self.cur = _W.QLineEdit(); self.cur.setEchoMode(_W.QLineEdit.Password)
         v.addWidget(self.cur)
@@ -301,7 +308,7 @@ class ChangePasswordDialog(_W.QDialog):
         v.addWidget(self.err)
         row = _W.QHBoxLayout()
         ok = primary(_W.QPushButton("ذخیره"), 100)
-        cancel = _W.QPushButton("انصراف")
+        cancel = _W.QPushButton("خروج از برنامه" if forced else "انصراف")
         ok.clicked.connect(self.save)
         cancel.clicked.connect(self.reject)
         row.addWidget(ok); row.addWidget(cancel)
@@ -313,12 +320,32 @@ class ChangePasswordDialog(_W.QDialog):
         if self.new1.text() != self.new2.text():
             self.err.setText("رمز جدید و تکرار آن یکسان نیستند.")
             return
+        if self.new1.text() == "admin":
+            self.err.setText("رمز پیش‌فرض را دوباره انتخاب نکنید.")
+            return
         try:
             auth_core.change_password(self.cur.text(), self.new1.text())
         except ValueError as exc:
             self.err.setText(str(exc))
             return
         self.accept()
+
+
+def _uses_default_password():
+    # type: () -> bool
+    stored = settings_mod.get_setting("admin_pass_hash") or ""
+    return bool(stored) and auth_core.verify_password("admin", stored)
+
+
+def _require_new_password(parent=None):
+    # type: (Optional[_W.QWidget]) -> bool
+    """Force a real password while the stock admin/admin is in place.
+    False = the user declined (the app does not open)."""
+    if not _uses_default_password():
+        return True
+    dlg = ChangePasswordDialog(parent, forced=True)
+    dlg.cur.setText("admin")
+    return dlg.exec_() == _W.QDialog.Accepted
 
 
 class AppWindow(_W.QMainWindow):
@@ -550,7 +577,10 @@ class AppWindow(_W.QMainWindow):
             try:
                 refresh()
             except Exception:
-                pass
+                # Report it (errors.log + message) instead of leaving a
+                # silently stale/blank page.
+                import sys
+                sys.excepthook(*sys.exc_info())
 
     def goto(self, key):
         row = self._row_for_key(key)
@@ -584,7 +614,7 @@ class AppWindow(_W.QMainWindow):
         if confirm_msg(self, "خارج می‌شوید؟"):
             self.hide()
             dlg = LoginDialog()
-            if dlg.exec_() == _W.QDialog.Accepted:
+            if dlg.exec_() == _W.QDialog.Accepted and                     _require_new_password():
                 self.username = dlg.user.value().strip() or "admin"
                 self._update_title()
                 self.show()
@@ -619,6 +649,8 @@ def run_desktop():
     auth_core.ensure_admin()
     dlg = LoginDialog()
     if dlg.exec_() != _W.QDialog.Accepted:
+        return None
+    if not _require_new_password():
         return None
     win = AppWindow(username=dlg.user.value().strip() or "admin")
     win.show()
